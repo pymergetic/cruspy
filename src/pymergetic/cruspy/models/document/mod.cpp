@@ -1,4 +1,4 @@
-#include "pymergetic-cruspy/src/models/document.rs.h"
+#include "pymergetic-cruspy/generated/models/document/mod.rs.h"
 
 #include "errors/mod.hpp"
 #include "models/document/mod.hpp"

@@ -1,10 +1,13 @@
 use pyo3::prelude::*;
 
-mod errors;
-mod models;
 mod module;
-mod schema;
 mod shm;
+
+#[path = "../generated/errors.rs"]
+pub mod errors;
+
+#[path = "../generated/models/mod.rs"]
+mod models;
 
 #[link(name = "cruspy-cpp", kind = "static")]
 extern "C" {}
@@ -24,9 +27,9 @@ fn runtime_version() -> &'static str {
     }
 }
 
-use module::ensure_package_path;
 use errors::register_errors_module;
-use models::document::register_document_module;
+use models::register_models_module;
+use module::ensure_package_path;
 use shm::register_shm_module;
 
 #[pymodule]
@@ -37,7 +40,7 @@ fn cruspy(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("ABI_VERSION", "1")?;
     m.add("RUNTIME_VERSION", runtime_version())?;
     register_errors_module(m)?;
-    register_document_module(m)?;
+    register_models_module(m)?;
     register_shm_module(m)?;
     Ok(())
 }

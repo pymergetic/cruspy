@@ -63,11 +63,29 @@ def test_cpp_validate_document() -> None:
         validate_document(id=1, text="x", score=2.0, active=True)
 
 
+def test_import_token_model() -> None:
+    from pymergetic.cruspy.models.token import Token, SCHEMA_HASH, TYPE_FQN
+
+    token = Token(id=1, value="abc", score=0.25, active=True)
+    assert token.model_dump()["value"] == "abc"
+    assert TYPE_FQN.endswith("::Token")
+    assert isinstance(SCHEMA_HASH, int)
+
+
+def test_cpp_validate_token() -> None:
+    from pymergetic.cruspy.models.token import validate_token
+
+    validate_token(id=1, value="ok", score=0.5, active=True)
+    with pytest.raises(ValueError, match="value exceeds maximum"):
+        validate_token(id=1, value="x" * 513, score=0.5, active=True)
+
+
 def test_errors_module() -> None:
-    from pymergetic.cruspy.errors import SchemaConflictError, cruspy_error_code
+    from pymergetic.cruspy.errors import SchemaConflictError, ShmError, cruspy_error_code
 
     exc = SchemaConflictError("schema mismatch")
     assert cruspy_error_code(exc) is None
+    assert issubclass(ShmError, Exception)
 
 
 def test_shm_and_functions_modules() -> None:

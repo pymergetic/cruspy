@@ -38,6 +38,11 @@ Homepage = "https://github.com/pymergetic/cruspy"
 Repository = "https://github.com/pymergetic/cruspy"
 Issues = "https://github.com/pymergetic/cruspy/issues"
 
+[dependency-groups]
+dev = [
+  "pymergetic-easybind",
+]
+
 [project.optional-dependencies]
 test = ["pymergetic-common[test]"]
 
