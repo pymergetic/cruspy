@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-HASH_FILE="${ROOT}/generated/.input_hash"
+HASH_FILE="${ROOT}/target/.input_hash"
 CURRENT="$(
   find "${ROOT}/src/pymergetic/cruspy" -name '*.hpp' -o -name '*.cpp' \
     | sort \

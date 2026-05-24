@@ -4,4 +4,5 @@ CompileFlags:
     - -Isrc/pymergetic/cruspy
     - -Ibuild_clangd/cxxbridge-include
     - -Ibuild_clangd/export
+    - -Itarget/deps/reflect-cpp/include
   CompilationDatabase: build_clangd

@@ -22,13 +22,17 @@ fi
 mkdir -p "${BUILD_DIR}"
 ln -sfn "$(realpath "${CXXBRIDGE}")" "${CXXBRIDGE_LINK}"
 
-# cxx-generated headers include "pymergetic/cruspy/.../mod.hpp" (namespace path).
-EXPORT_ROOT="${BUILD_DIR}/export"
-mkdir -p "${EXPORT_ROOT}/pymergetic/cruspy/models/document"
-ln -sfn "${INCLUDE_ROOT}/models/document/mod.hpp" \
-  "${EXPORT_ROOT}/pymergetic/cruspy/models/document/mod.hpp"
+# Per-model headers are indexed directly under models/<module>/.
+REFLECT_CPP="${ROOT}/target/deps/reflect-cpp/include"
+if [[ ! -f "${REFLECT_CPP}/rfl/Field.hpp" ]]; then
+  cargo build -q
+fi
+if [[ ! -f "${REFLECT_CPP}/rfl/Field.hpp" ]]; then
+  echo "error: reflect-cpp headers not found at ${REFLECT_CPP}; run cargo build first" >&2
+  exit 1
+fi
 
-COMMON_FLAGS=(-std=c++20 "-I${INCLUDE_ROOT}" "-I${CXXBRIDGE_LINK}" "-I${EXPORT_ROOT}")
+COMMON_FLAGS=(-std=c++20 "-I${INCLUDE_ROOT}" "-I${CXXBRIDGE_LINK}" "-I${REFLECT_CPP}")
 
 python3 - "${ROOT}" "${BUILD_DIR}" "${COMMON_FLAGS[@]}" <<'PY'
 import json

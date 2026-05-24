@@ -1,20 +1,14 @@
-#include "pymergetic-cruspy/generated/models/document/mod.rs.h"
+#include "rust/cxx.h"
 
-#include "errors/mod.hpp"
 #include "models/document/mod.hpp"
 
 namespace pymergetic::cruspy::models::document {
 
-void validate_document(const Document& doc) {
-  if (doc.id < 1) {
-    throw ValidationError("cruspy.validation:id must be >= 1");
-  }
-  if (doc.score < 0.0 || doc.score > 1.0) {
-    throw ValidationError("cruspy.validation:score must be between 0.0 and 1.0");
-  }
-  if (doc.text.size() > 512) {
-    throw ValidationError("cruspy.validation:text exceeds maximum length of 512");
-  }
+std::unique_ptr<Document> Document::make(std::int32_t id, ::rust::String text, double score,
+                                         bool active, bool has_revision, std::int32_t revision,
+                                         ::rust::String meta_author, std::int32_t meta_tags) {
+  return schema::make_model<Document>(id, std::string(text), score, active, has_revision, revision,
+                                      std::string(meta_author), meta_tags);
 }
 
 }  // namespace pymergetic::cruspy::models::document

@@ -3,14 +3,17 @@ use pyo3::prelude::*;
 mod allocator;
 mod async_bridge;
 mod core;
+mod memory;
+mod model_runtime;
 mod module;
 mod runtime;
+mod schema;
 mod shm;
 
-#[path = "../generated/errors.rs"]
+#[path = "pymergetic/cruspy/errors/mod.gen.rs"]
 pub mod errors;
 
-#[path = "../generated/models/mod.rs"]
+#[path = "pymergetic/cruspy/models/mod.gen.rs"]
 mod models;
 
 #[link(name = "cruspy-cpp", kind = "static")]
@@ -31,6 +34,7 @@ fn runtime_version() -> &'static str {
 }
 
 use allocator::register_allocator_module;
+use allocator::memory_abi;
 use async_bridge::init_runtime;
 use core::register_core_module;
 use errors::register_errors_module;
@@ -46,6 +50,7 @@ fn cruspy(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__doc__", "cruspy — polyglot shared-memory runtime")?;
     ensure_package_path(m)?;
     m.add("ABI_VERSION", unsafe { cruspy_abi_version() }.to_string())?;
+    m.add("MEMORY_ABI", memory_abi().to_string())?;
     m.add("RUNTIME_VERSION", runtime_version())?;
     register_errors_module(m)?;
     register_core_module(m)?;

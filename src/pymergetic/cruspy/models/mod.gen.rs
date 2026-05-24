@@ -2,14 +2,14 @@
 
 use pyo3::prelude::*;
 
+#[path = "document/mod.gen.rs"]
 pub mod document;
-pub mod token;
 
 pub fn register_models_module(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     let py = parent.py();
     crate::module::register_submodule(py, parent, "pymergetic.cruspy.models", "models", |models| {
+        document::metadata::register_module(models)?;
         document::register_module(models)?;
-        token::register_module(models)?;
         Ok(())
     })
 }

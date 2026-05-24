@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -14,31 +15,40 @@ PYI_HEADER = f"# {GENERATED_HEADER}"
 def check_tree(root: Path) -> list[str]:
     failures: list[str] = []
     src = root / "src" / "pymergetic" / "cruspy"
-    generated = root / "generated"
 
     if not src.is_dir():
         failures.append(f"missing source tree: {src}")
         return failures
 
-    for path in generated.rglob("*"):
+    for path in src.rglob("*"):
         if not path.is_file():
             continue
-        if path.suffix not in {".rs", ".pyi"}:
+        if path.name.endswith(".gen.py") or path.suffix == ".pyi":
+            expected = PYI_HEADER
+        elif path.name.endswith(".gen.rs"):
+            expected = GENERATED_HEADER
+        else:
             continue
         text = path.read_text(encoding="utf-8")
-        expected = PYI_HEADER if path.suffix == ".pyi" else GENERATED_HEADER
         if not text.startswith(expected):
             failures.append(f"generated file missing header: {path}")
 
-    manifest = generated / "manifest.json"
+    manifest = src / "manifest.json"
     if not manifest.is_file():
-        failures.append("missing generated/manifest.json")
+        failures.append("missing src/pymergetic/cruspy/manifest.json")
+        return failures
 
-    for model_dir in (src / "models").glob("*"):
-        if not model_dir.is_dir():
-            continue
-        if not (model_dir / "types.hpp").is_file() and not (model_dir / "mod.hpp").is_file():
-            failures.append(f"model directory missing header: {model_dir}")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    for model in payload.get("models", []):
+        source = Path(model["source"])
+        if not source.is_file():
+            failures.append(f"manifest model source missing: {source}")
+        cpp = root / model["cpp"]
+        if not cpp.is_file():
+            failures.append(f"manifest model cpp missing: {cpp}")
+        bridge_rs = root / model["bridge_rs"]
+        if not bridge_rs.is_file():
+            failures.append(f"manifest bridge missing: {bridge_rs}")
 
     return failures
 

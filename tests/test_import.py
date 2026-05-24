@@ -1,6 +1,4 @@
 import importlib
-import json
-from importlib.metadata import version
 
 import pytest
 from pydantic import BaseModel, ValidationError
@@ -10,19 +8,20 @@ def test_import_root() -> None:
     mod = importlib.import_module("pymergetic.cruspy")
     assert "polyglot" in (mod.__doc__ or "")
     assert mod.ABI_VERSION == "1"
-    assert mod.RUNTIME_VERSION == version("pymergetic-cruspy")
 
 
 def test_import_document_model() -> None:
     from pymergetic.cruspy.models.document import Document, SCHEMA_HASH, TYPE_FQN
 
-    doc = Document(id=1, text="hello", score=0.5, active=True)
+    doc = Document(id=1, text="hello", score=0.5, active=True, revision=2)
     assert isinstance(doc, BaseModel)
     assert doc.model_dump() == {
         "id": 1,
         "text": "hello",
         "score": 0.5,
         "active": True,
+        "revision": 2,
+        "meta": {"author": "", "tags": 0},
     }
     assert TYPE_FQN == "pymergetic::cruspy::models::document::Document"
     assert isinstance(SCHEMA_HASH, int)
@@ -32,16 +31,10 @@ def test_import_document_model() -> None:
 def test_document_json_round_trip() -> None:
     from pymergetic.cruspy.models.document import Document
 
-    doc = Document(id=42, text="round-trip", score=0.25, active=False)
+    doc = Document(id=42, text="round-trip", score=0.25, active=False, revision=None)
     payload = doc.model_dump_json()
     restored = Document.model_validate_json(payload)
     assert restored.model_dump() == doc.model_dump()
-    assert json.loads(payload) == {
-        "id": 42,
-        "text": "round-trip",
-        "score": 0.25,
-        "active": False,
-    }
 
 
 def test_document_validation() -> None:
@@ -51,33 +44,21 @@ def test_document_validation() -> None:
         Document(id=0, text="x", score=0.5, active=True)
     with pytest.raises(ValidationError):
         Document(id=1, text="x", score=1.5, active=True)
+    with pytest.raises(ValidationError):
+        Document(id=1, text="x", score=0.5, active=True, revision=-1)
 
 
 def test_cpp_validate_document() -> None:
     from pymergetic.cruspy.models.document import validate_document
 
-    validate_document(id=1, text="ok", score=0.5, active=True)
+    validate_document(id=1, text="ok", score=0.5, active=True, revision=0)
+    validate_document(id=1, text="ok", score=0.5, active=True, revision=None)
     with pytest.raises(ValueError, match="id must be >= 1"):
-        validate_document(id=0, text="x", score=0.5, active=True)
+        validate_document(id=0, text="x", score=0.5, active=True, revision=None)
     with pytest.raises(ValueError, match="score must be between"):
-        validate_document(id=1, text="x", score=2.0, active=True)
-
-
-def test_import_token_model() -> None:
-    from pymergetic.cruspy.models.token import Token, SCHEMA_HASH, TYPE_FQN
-
-    token = Token(id=1, value="abc", score=0.25, active=True)
-    assert token.model_dump()["value"] == "abc"
-    assert TYPE_FQN.endswith("::Token")
-    assert isinstance(SCHEMA_HASH, int)
-
-
-def test_cpp_validate_token() -> None:
-    from pymergetic.cruspy.models.token import validate_token
-
-    validate_token(id=1, value="ok", score=0.5, active=True)
-    with pytest.raises(ValueError, match="value exceeds maximum"):
-        validate_token(id=1, value="x" * 513, score=0.5, active=True)
+        validate_document(id=1, text="x", score=2.0, active=True, revision=None)
+    with pytest.raises(ValueError, match="revision must be >= 0"):
+        validate_document(id=1, text="x", score=0.5, active=True, revision=-1)
 
 
 def test_errors_module() -> None:

@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SOURCE="${ROOT}/src/pymergetic/cruspy"
-OUTPUT="${ROOT}/generated"
+OUTPUT="${SOURCE}"
 NAMESPACE="pymergetic::cruspy"
 
 if [[ -x "${ROOT}/../../.venv/bin/python" ]]; then

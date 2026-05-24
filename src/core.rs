@@ -4,13 +4,26 @@ use pyo3::prelude::*;
 
 use crate::module::register_submodule;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldKind {
     Int32,
     Int64,
     Float64,
     Bool,
     String,
+    Model,
+}
+
+pub fn field_kind_from_schema(schema_type: &str) -> FieldKind {
+    match schema_type {
+        "int32" | "optional_int32" => FieldKind::Int32,
+        "int64" | "optional_int64" => FieldKind::Int64,
+        "float64" => FieldKind::Float64,
+        "bool" => FieldKind::Bool,
+        "string" => FieldKind::String,
+        s if s.starts_with("model:") => FieldKind::Model,
+        _ => FieldKind::String,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -19,6 +32,8 @@ pub struct FieldDescriptor {
     pub kind: FieldKind,
     pub offset: u32,
     pub size: u32,
+    pub description: &'static str,
+    pub optional: bool,
 }
 
 #[derive(Clone, Debug)]

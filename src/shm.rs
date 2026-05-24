@@ -1,10 +1,33 @@
-use std::sync::OnceLock;
+use std::ffi::CString;
+use std::mem::MaybeUninit;
 
 use pyo3::prelude::*;
 use pyo3::types::PyModule;
 
 use crate::errors::{AllocationError, map_cxx_exception, ShmError};
+use crate::memory::MemoryHandle;
 use crate::module::register_submodule;
+use crate::schema::{decode_all_fields, decode_field_value, FieldMetaEntry};
+
+extern "C" {
+    fn cruspy_process_arena_open(name: *const std::ffi::c_char, capacity: u64) -> i32;
+    fn cruspy_process_arena_allocate(
+        name: *const std::ffi::c_char,
+        capacity: u64,
+        type_fqn: *const std::ffi::c_char,
+        schema_hash: u64,
+        data: *const u8,
+        byte_size: u32,
+        out: *mut MemoryHandle,
+    ) -> i32;
+    fn cruspy_resolve(
+        handle: *const MemoryHandle,
+        out_data: *mut u8,
+        out_capacity: u32,
+        out_size: *mut u32,
+    ) -> i32;
+    fn cruspy_substrate_last_error() -> *const std::ffi::c_char;
+}
 
 #[pyclass(name = "ShmHandle")]
 #[derive(Clone, Debug)]
@@ -19,45 +42,110 @@ pub struct ShmHandle {
     pub schema_hash: u64,
     #[pyo3(get)]
     pub byte_size: u32,
+    #[pyo3(get)]
+    pub domain_id_high: u64,
+    #[pyo3(get)]
+    pub domain_id_low: u64,
+    #[pyo3(get)]
+    pub generation: u64,
+    #[pyo3(get)]
+    pub abi_version: u32,
+    #[pyo3(get)]
+    pub flags: u32,
+    pub(crate) memory: MemoryHandle,
+}
+
+impl ShmHandle {
+    pub(crate) fn from_memory(segment: String, type_fqn: String, memory: MemoryHandle) -> Self {
+        Self {
+            segment,
+            offset: memory.offset,
+            type_fqn,
+            schema_hash: memory.schema_hash,
+            byte_size: memory.byte_size as u32,
+            domain_id_high: memory.domain_id.high,
+            domain_id_low: memory.domain_id.low,
+            generation: memory.generation,
+            abi_version: memory.abi_version,
+            flags: memory.flags,
+            memory,
+        }
+    }
 }
 
 #[pyclass(name = "ShmArena", unsendable)]
 pub struct ShmArena {
     name: String,
     capacity: usize,
-    storage: std::sync::Mutex<Vec<u8>>,
 }
 
 impl ShmArena {
-    fn write_bytes_impl(
+    pub(crate) fn write_bytes_impl(
         &self,
         type_fqn: String,
         schema_hash: u64,
         payload: &[u8],
     ) -> PyResult<ShmHandle> {
-        if payload.len() > self.capacity {
-            return Err(AllocationError::new_err("SHM slot exceeds arena capacity"));
+        let name = CString::new(self.name.as_str()).map_err(|_| {
+            AllocationError::new_err("cruspy.allocation: arena name contains NUL")
+        })?;
+        let fqn = CString::new(type_fqn.as_str()).map_err(|_| {
+            AllocationError::new_err("cruspy.allocation: type_fqn contains NUL")
+        })?;
+        let mut out = MaybeUninit::<MemoryHandle>::uninit();
+        let status = unsafe {
+            cruspy_process_arena_allocate(
+                name.as_ptr(),
+                self.capacity as u64,
+                fqn.as_ptr(),
+                schema_hash,
+                payload.as_ptr(),
+                payload.len() as u32,
+                out.as_mut_ptr(),
+            )
+        };
+        if status != 0 {
+            let message = unsafe {
+                std::ffi::CStr::from_ptr(cruspy_substrate_last_error())
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            if message.contains("allocation") {
+                return Err(AllocationError::new_err(message));
+            }
+            return Err(ShmError::new_err(message));
         }
-        let mut storage = self.storage.lock().expect("arena storage");
-        storage[..payload.len()].copy_from_slice(payload);
-        Ok(ShmHandle {
-            segment: self.name.clone(),
-            offset: 0,
+        Ok(ShmHandle::from_memory(
+            self.name.clone(),
             type_fqn,
-            schema_hash,
-            byte_size: payload.len() as u32,
-        })
+            unsafe { out.assume_init() },
+        ))
     }
 
     fn read_bytes_impl(&self, handle: &ShmHandle) -> PyResult<Vec<u8>> {
         if handle.segment != self.name {
-            return Err(ShmError::new_err("handle segment mismatch"));
+            return Err(ShmError::new_err("cruspy.shm: handle segment mismatch"));
         }
-        let storage = self.storage.lock().expect("arena storage");
-        if handle.byte_size as usize > storage.len() {
-            return Err(ShmError::new_err("handle out of bounds"));
+        let mut out = vec![0u8; handle.byte_size as usize];
+        let mut out_size = 0u32;
+        let status = unsafe {
+            cruspy_resolve(
+                &handle.memory,
+                out.as_mut_ptr(),
+                out.len() as u32,
+                &mut out_size,
+            )
+        };
+        if status != 0 {
+            let message = unsafe {
+                std::ffi::CStr::from_ptr(cruspy_substrate_last_error())
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            return Err(ShmError::new_err(message));
         }
-        Ok(storage[..handle.byte_size as usize].to_vec())
+        out.truncate(out_size as usize);
+        Ok(out)
     }
 }
 
@@ -65,10 +153,14 @@ impl ShmArena {
 impl ShmArena {
     #[new]
     fn new(name: String, size: usize) -> Self {
+        if let Ok(name_c) = CString::new(name.as_str()) {
+            unsafe {
+                let _ = cruspy_process_arena_open(name_c.as_ptr(), size as u64);
+            }
+        }
         Self {
             name,
             capacity: size,
-            storage: std::sync::Mutex::new(vec![0; size]),
         }
     }
 
@@ -95,21 +187,20 @@ pub struct ShmView {
     payload: Vec<u8>,
     model_module: String,
     model_name: String,
+    field_meta: Vec<FieldMetaEntry>,
+}
+
+impl ShmView {
+    fn field_meta_static(&self) -> &[FieldMetaEntry] {
+        self.field_meta.as_slice()
+    }
 }
 
 #[pymethods]
 impl ShmView {
     fn __getattr__(&self, name: String) -> PyResult<Py<PyAny>> {
         Python::with_gil(|py| {
-            let model_mod = PyModule::import(py, &self.model_module)?;
-            let cls = model_mod.getattr(&self.model_name)?;
-            let json_mod = PyModule::import(py, "json")?;
-            let text = std::str::from_utf8(&self.payload).map_err(|err| {
-                PyErr::new::<pyo3::exceptions::PyValueError, _>(err.to_string())
-            })?;
-            let data = json_mod.getattr("loads")?.call1((text,))?;
-            let instance = cls.call_method1("model_validate", (data,))?;
-            instance.getattr(name).map(|value| value.unbind())
+            decode_field_value(py, &self.payload, &name, self.field_meta_static())
         })
     }
 
@@ -120,11 +211,7 @@ impl ShmView {
     fn materialize(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let model_mod = PyModule::import(py, &self.model_module)?;
         let cls = model_mod.getattr(&self.model_name)?;
-        let json_mod = PyModule::import(py, "json")?;
-        let text = std::str::from_utf8(&self.payload).map_err(|err| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(err.to_string())
-        })?;
-        let data = json_mod.getattr("loads")?.call1((text,))?;
+        let data = decode_all_fields(py, &self.payload, self.field_meta_static())?;
         cls.call_method1("model_validate", (data,)).map(|obj| obj.unbind())
     }
 }
@@ -149,6 +236,7 @@ pub fn view_model_shm(
     expected_schema_hash: u64,
     model_module: &str,
     model_name: &str,
+    field_meta: &[FieldMetaEntry],
 ) -> PyResult<ShmView> {
     if handle.schema_hash != expected_schema_hash {
         return Err(map_cxx_exception(
@@ -161,10 +249,11 @@ pub fn view_model_shm(
         payload,
         model_module: model_module.to_string(),
         model_name: model_name.to_string(),
+        field_meta: field_meta.to_vec(),
     })
 }
 
-static TRANSFORM: OnceLock<Py<PyAny>> = OnceLock::new();
+static TRANSFORM: std::sync::OnceLock<Py<PyAny>> = std::sync::OnceLock::new();
 
 #[pyfunction]
 fn register_transform(callable: Bound<'_, PyAny>) -> PyResult<()> {

@@ -49,7 +49,6 @@ test = ["pymergetic-common[test]"]
 
 [project.entry-points."pymergetic.cruspy.components"]
 document = "pymergetic.cruspy.models.document"
-token = "pymergetic.cruspy.models.token"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

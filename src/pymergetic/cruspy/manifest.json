@@ -3,24 +3,24 @@
   "source_dir": "/home/ladmin/Devel/os-sdk/packages/cruspy/src/pymergetic/cruspy",
   "models": [
     {
+      "name": "Metadata",
+      "module_path": "models/document/metadata",
+      "namespace": "pymergetic::cruspy::models::document::metadata",
+      "fqn": "pymergetic::cruspy::models::document::metadata::Metadata",
+      "schema_hash": 1145017226261610918,
+      "bridge_rs": "src/pymergetic/cruspy/models/document/metadata/mod.gen.rs",
+      "cpp": "src/pymergetic/cruspy/models/document/metadata/mod.cpp",
+      "source": "/home/ladmin/Devel/os-sdk/packages/cruspy/src/pymergetic/cruspy/models/document/metadata/mod.hpp"
+    },
+    {
       "name": "Document",
       "module_path": "models/document",
       "namespace": "pymergetic::cruspy::models::document",
       "fqn": "pymergetic::cruspy::models::document::Document",
-      "schema_hash": 9581365834243086720,
-      "bridge_rs": "generated/models/document/mod.rs",
+      "schema_hash": 14874371387292292213,
+      "bridge_rs": "src/pymergetic/cruspy/models/document/mod.gen.rs",
       "cpp": "src/pymergetic/cruspy/models/document/mod.cpp",
-      "source": "/home/ladmin/Devel/os-sdk/packages/cruspy/src/pymergetic/cruspy/models/document/types.hpp"
-    },
-    {
-      "name": "Token",
-      "module_path": "models/token",
-      "namespace": "pymergetic::cruspy::models::token",
-      "fqn": "pymergetic::cruspy::models::token::Token",
-      "schema_hash": 7468152729483132446,
-      "bridge_rs": "generated/models/token/mod.rs",
-      "cpp": "src/pymergetic/cruspy/models/token/mod.cpp",
-      "source": "/home/ladmin/Devel/os-sdk/packages/cruspy/src/pymergetic/cruspy/models/token/types.hpp"
+      "source": "/home/ladmin/Devel/os-sdk/packages/cruspy/src/pymergetic/cruspy/models/document/mod.hpp"
     }
   ],
   "errors": [

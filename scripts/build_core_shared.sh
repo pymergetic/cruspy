@@ -10,7 +10,17 @@ SOURCES=(
   src/pymergetic/cruspy/core/mod.cpp
   src/pymergetic/cruspy/core/registry.cpp
   src/pymergetic/cruspy/runtime/mod.cpp
+  src/pymergetic/cruspy/schema/codec.cpp
+  src/pymergetic/cruspy/schema/schema_base.cpp
+  src/pymergetic/cruspy/schema/field_base.cpp
+  src/pymergetic/cruspy/schema/model_base.cpp
+  src/pymergetic/cruspy/schema/substrate_api.cpp
   src/pymergetic/cruspy/allocator/mod.cpp
+  src/pymergetic/cruspy/allocator/domain_backend.cpp
+  src/pymergetic/cruspy/allocator/process_arena_backend.cpp
+  src/pymergetic/cruspy/allocator/file_map_backend.cpp
+  src/pymergetic/cruspy/allocator/domain_registry.cpp
+  src/pymergetic/cruspy/allocator/substrate_api.cpp
   src/pymergetic/cruspy/shm/mod.cpp
   src/pymergetic/cruspy/functions/mod.cpp
 )

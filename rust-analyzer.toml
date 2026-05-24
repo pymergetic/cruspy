@@ -1,0 +1,9 @@
+# rust-analyzer reads this when packages/cruspy is the linked Cargo project.
+# Proc-macros (pyo3_macros, etc.) are built in the debug profile; maturin --release
+# alone does not refresh target/debug/deps/*.so that RA loads for #[pyclass]/#[pyfunction].
+
+[cargo]
+buildScripts.enable = true
+
+[check]
+command = "check"
