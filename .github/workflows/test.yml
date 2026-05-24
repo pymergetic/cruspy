@@ -1,0 +1,46 @@
+name: cruspy
+
+on:
+  push:
+    paths:
+      - "packages/cruspy/**"
+      - "packages/easybind/src/pymergetic/easybind/rust_codegen/**"
+      - "packages/easybind/tests/test_rust_codegen.py"
+  pull_request:
+    paths:
+      - "packages/cruspy/**"
+      - "packages/easybind/src/pymergetic/easybind/rust_codegen/**"
+      - "packages/easybind/tests/test_rust_codegen.py"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Sync workspace
+        run: uv sync
+
+      - name: Codegen staleness check
+        run: bash packages/cruspy/scripts/check_codegen.sh
+
+      - name: Unified tree check
+        run: python packages/cruspy/scripts/check_unified_tree.py
+
+      - name: Forbidden include check
+        run: bash packages/cruspy/scripts/check_forbidden_includes.sh
+
+      - name: Easybind rust_codegen tests
+        run: uv run --directory packages/easybind --with pytest pytest -v
+
+      - name: Build and test cruspy
+        run: |
+          uv run --directory packages/cruspy --with maturin maturin develop --release
+          uv run --directory packages/cruspy --with pytest pytest -v

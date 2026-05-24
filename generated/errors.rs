@@ -37,27 +37,44 @@ create_exception!(
     "Mirrored from pymergetic::cruspy::TimeoutError."
 );
 
-pub fn map_cxx_exception(_py: Python<'_>, message: &str) -> PyErr {
-    let msg = message.to_string();
-    if msg.contains("ValidationError") || msg.contains("must be") {
-        return PyErr::new::<pyo3::exceptions::PyValueError, _>(msg);
+pub fn map_cxx_exception(py: Python<'_>, message: &str) -> PyErr {
+    let (code, msg) = match message.split_once(':') {
+        Some(parts) => parts,
+        None => ("cruspy.bridge", message),
+    };
+    if code == "cruspy.validation" {
+        let exc = PyErr::new::<pyo3::exceptions::PyValueError, _>(msg.to_string());
+        let _ = exc.value(py).setattr("_cruspy_error_code", code);
+        return exc;
     }
-    if msg.contains("AllocationError") {
-        return AllocationError::new_err(msg);
+    if code == "cruspy.allocation" {
+        let exc = AllocationError::new_err(msg.to_string());
+        let _ = exc.value(py).setattr("_cruspy_error_code", "cruspy.allocation");
+        return exc;
     }
-    if msg.contains("BridgeError") {
-        return BridgeError::new_err(msg);
+    if code == "cruspy.bridge" {
+        let exc = BridgeError::new_err(msg.to_string());
+        let _ = exc.value(py).setattr("_cruspy_error_code", "cruspy.bridge");
+        return exc;
     }
-    if msg.contains("ShmError") {
-        return ShmError::new_err(msg);
+    if code == "cruspy.shm" {
+        let exc = ShmError::new_err(msg.to_string());
+        let _ = exc.value(py).setattr("_cruspy_error_code", "cruspy.shm");
+        return exc;
     }
-    if msg.contains("SchemaConflictError") {
-        return SchemaConflictError::new_err(msg);
+    if code == "cruspy.schema_conflict" {
+        let exc = SchemaConflictError::new_err(msg.to_string());
+        let _ = exc.value(py).setattr("_cruspy_error_code", "cruspy.schema_conflict");
+        return exc;
     }
-    if msg.contains("TimeoutError") {
-        return TimeoutError::new_err(msg);
+    if code == "cruspy.timeout" {
+        let exc = TimeoutError::new_err(msg.to_string());
+        let _ = exc.value(py).setattr("_cruspy_error_code", "cruspy.timeout");
+        return exc;
     }
-    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(msg)
+    let exc = PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(msg.to_string());
+    let _ = exc.value(py).setattr("_cruspy_error_code", code);
+    exc
 }
 
 #[pyfunction]

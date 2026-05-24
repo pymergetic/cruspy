@@ -1,15 +1,6 @@
-#include "runtime/mod.hpp"
+#include "core/mod.hpp"
 
-#ifndef CRUSPY_PKG_VERSION
-#define CRUSPY_PKG_VERSION "unknown"
-#endif
-
-namespace pymergetic::cruspy {
-
-const char* runtime_version() { return CRUSPY_PKG_VERSION; }
-
-}  // namespace pymergetic::cruspy
-
-extern "C" const char* cruspy_runtime_version() {
-  return pymergetic::cruspy::runtime_version();
+// Runtime entry retained for EP-0010 path compatibility.
+const char* pymergetic_cruspy_runtime_version() {
+  return pymergetic::cruspy::core::runtime_version();
 }

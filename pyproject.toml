@@ -41,10 +41,15 @@ Issues = "https://github.com/pymergetic/cruspy/issues"
 [dependency-groups]
 dev = [
   "pymergetic-easybind",
+  "libclang>=18",
 ]
 
 [project.optional-dependencies]
 test = ["pymergetic-common[test]"]
+
+[project.entry-points."pymergetic.cruspy.components"]
+document = "pymergetic.cruspy.models.document"
+token = "pymergetic.cruspy.models.token"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

@@ -1,6 +1,10 @@
 use pyo3::prelude::*;
 
+mod allocator;
+mod async_bridge;
+mod core;
 mod module;
+mod runtime;
 mod shm;
 
 #[path = "../generated/errors.rs"]
@@ -10,10 +14,9 @@ pub mod errors;
 mod models;
 
 #[link(name = "cruspy-cpp", kind = "static")]
-extern "C" {}
-
 extern "C" {
     fn cruspy_runtime_version() -> *const std::ffi::c_char;
+    fn cruspy_abi_version() -> u32;
 }
 
 fn runtime_version() -> &'static str {
@@ -27,20 +30,28 @@ fn runtime_version() -> &'static str {
     }
 }
 
+use allocator::register_allocator_module;
+use async_bridge::init_runtime;
+use core::register_core_module;
 use errors::register_errors_module;
 use models::register_models_module;
 use module::ensure_package_path;
+use runtime::register_runtime_module;
 use shm::register_shm_module;
 
 #[pymodule]
 #[pyo3(name = "cruspy")]
 fn cruspy(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    init_runtime();
     m.add("__doc__", "cruspy — polyglot shared-memory runtime")?;
     ensure_package_path(m)?;
-    m.add("ABI_VERSION", "1")?;
+    m.add("ABI_VERSION", unsafe { cruspy_abi_version() }.to_string())?;
     m.add("RUNTIME_VERSION", runtime_version())?;
     register_errors_module(m)?;
+    register_core_module(m)?;
+    register_allocator_module(m)?;
     register_models_module(m)?;
     register_shm_module(m)?;
+    register_runtime_module(m)?;
     Ok(())
 }
