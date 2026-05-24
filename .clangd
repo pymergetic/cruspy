@@ -1,0 +1,7 @@
+CompileFlags:
+  Add:
+    - -std=c++20
+    - -Isrc/pymergetic/cruspy
+    - -Ibuild_clangd/cxxbridge-include
+    - -Ibuild_clangd/export
+  CompilationDatabase: build_clangd
