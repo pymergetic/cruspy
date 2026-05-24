@@ -108,6 +108,9 @@ functions::CruspyMethodSlot* resolve_static_method_slot(const char* fqn, const c
     return TypeRegistry::global().method_slot(fqn, method);
 }
 
+extern "C" int cruspy_dispatch_python_f64(const pymergetic::cruspy::substrate::MemoryHandle* handle,
+                                          const char* method, const char* arg0, const char* arg1, double* out);
+
 bool dispatch_bool(functions::CruspyMethodSlot* slot, const substrate::MemoryHandle& handle, bool* out) {
     if (slot == nullptr || out == nullptr) {
         return false;
@@ -143,9 +146,9 @@ bool dispatch_void(functions::CruspyMethodSlot* slot, substrate::MemoryHandle* h
     return false;
 }
 
-bool dispatch_f64(functions::CruspyMethodSlot* slot, const substrate::MemoryHandle& handle, const char* arg0,
-                  const char* arg1, double* out) {
-    if (slot == nullptr || out == nullptr) {
+bool dispatch_f64(functions::CruspyMethodSlot* slot, const substrate::MemoryHandle& handle, const char* method,
+                  const char* arg0, const char* arg1, double* out) {
+    if (slot == nullptr || out == nullptr || method == nullptr) {
         return false;
     }
     const uint8_t order[] = {slot->preferred, functions::kLangCpp, functions::kLangRust, functions::kLangPython};
@@ -162,6 +165,11 @@ bool dispatch_f64(functions::CruspyMethodSlot* slot, const substrate::MemoryHand
             auto fn = reinterpret_cast<functions::MethodF64Fn>(slot->cpp_fn);
             *out = fn(&handle, arg0, arg1);
             return true;
+        }
+        if (lang == functions::kLangPython && (slot->available & functions::kAvailPython) != 0) {
+            if (cruspy_dispatch_python_f64(&handle, method, arg0, arg1, out) == 0) {
+                return true;
+            }
         }
     }
     return false;
@@ -278,6 +286,24 @@ bool TypeRegistry::register_method(std::string_view fqn, std::string_view name, 
         return true;
     }
     it->second.methods[std::string(name)] = slot;
+    return true;
+}
+
+bool TypeRegistry::enable_python_method(std::string_view fqn, std::string_view name) {
+    std::lock_guard lock(mutex_);
+    functions::CruspyMethodSlot slot{};
+    slot.available = functions::kAvailPython;
+    slot.preferred = functions::kLangPython;
+    const auto it = types_.find(std::string(fqn));
+    if (it != types_.end()) {
+        auto [mit, inserted] = it->second.methods.emplace(std::string(name), slot);
+        if (!inserted) {
+            mit->second.available |= functions::kAvailPython;
+            mit->second.preferred = functions::kLangPython;
+        }
+        return true;
+    }
+    pending_methods().emplace_back(std::string(fqn), std::string(name), slot);
     return true;
 }
 
@@ -552,7 +578,7 @@ bool call_void(substrate::MemoryHandle* handle, const char* method) {
 
 bool call_f64(const substrate::MemoryHandle& handle, const char* method, const char* arg0, const char* arg1,
               double* out) {
-    return dispatch_f64(resolve_method_slot(handle, method), handle, arg0, arg1, out);
+    return dispatch_f64(resolve_method_slot(handle, method), handle, method, arg0, arg1, out);
 }
 
 int call_bytes(const substrate::MemoryHandle& handle, const char* method, uint8_t* out, std::size_t capacity) {
@@ -579,6 +605,21 @@ int call_static_str(const char* fqn, const char* method, char* out, std::size_t 
     }
     auto fn = reinterpret_cast<functions::MethodStaticStrFn>(slot->cpp_fn);
     return fn(fqn, out, capacity);
+}
+
+int resolve_handle_fqn(const substrate::MemoryHandle& handle, char* out, std::size_t capacity) {
+    if (out == nullptr || capacity == 0) {
+        return -1;
+    }
+    const auto* entry = entry_for_handle(handle);
+    if (entry == nullptr) {
+        return -2;
+    }
+    const int written = std::snprintf(out, capacity, "%s", entry->fqn.c_str());
+    if (written < 0 || static_cast<std::size_t>(written) >= capacity) {
+        return -3;
+    }
+    return written;
 }
 
 void bootstrap() {
@@ -749,6 +790,21 @@ int cruspy_register_cpp_method(const char* fqn, const char* method, void* cpp_fn
     slot.available = pymergetic::cruspy::functions::kAvailCpp;
     slot.preferred = static_cast<uint8_t>(preferred);
     return pymergetic::cruspy::registry::TypeRegistry::global().register_method(fqn, method, slot) ? 0 : -2;
+}
+
+int cruspy_register_python_method(const char* fqn, const char* method) {
+    if (fqn == nullptr || method == nullptr) {
+        return -1;
+    }
+    return pymergetic::cruspy::registry::TypeRegistry::global().enable_python_method(fqn, method) ? 0 : -2;
+}
+
+int cruspy_resolve_handle_fqn(const pymergetic::cruspy::substrate::MemoryHandle* handle, char* out,
+                              std::size_t capacity) {
+    if (handle == nullptr) {
+        return -1;
+    }
+    return pymergetic::cruspy::registry::resolve_handle_fqn(*handle, out, capacity);
 }
 
 }  // extern "C"

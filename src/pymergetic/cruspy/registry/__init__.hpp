@@ -66,6 +66,7 @@ public:
 
     bool register_type(TypeEntry entry);
     bool register_method(std::string_view fqn, std::string_view name, functions::CruspyMethodSlot slot);
+    bool enable_python_method(std::string_view fqn, std::string_view name);
     const TypeEntry* lookup(std::string_view fqn) const;
     const TypeEntry* lookup_by_schema_hash(uint64_t schema_hash) const;
     functions::CruspyMethodSlot* method_slot(std::string_view fqn, std::string_view name);
@@ -102,6 +103,7 @@ int call_bytes(const substrate::MemoryHandle& handle, const char* method, uint8_
 bool call_constructor(const char* fqn, const char* method, const char* arg0, const char* arg1,
                       substrate::MemoryHandle* out);
 int call_static_str(const char* fqn, const char* method, char* out, std::size_t capacity);
+int resolve_handle_fqn(const substrate::MemoryHandle& handle, char* out, std::size_t capacity);
 
 void bootstrap();
 
@@ -135,6 +137,11 @@ int cruspy_call_constructor(const char* fqn, const char* method, const char* arg
 int cruspy_call_static_str(const char* fqn, const char* method, char* out, std::size_t capacity);
 int cruspy_register_rust_method(const char* fqn, const char* method, void* rust_fn, int preferred);
 int cruspy_register_cpp_method(const char* fqn, const char* method, void* cpp_fn, int preferred);
+int cruspy_register_python_method(const char* fqn, const char* method);
+int cruspy_dispatch_python_f64(const pymergetic::cruspy::substrate::MemoryHandle* handle, const char* method,
+                               const char* arg0, const char* arg1, double* out);
+int cruspy_resolve_handle_fqn(const pymergetic::cruspy::substrate::MemoryHandle* handle, char* out,
+                              std::size_t capacity);
 
 #ifdef __cplusplus
 }

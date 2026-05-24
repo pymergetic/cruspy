@@ -99,6 +99,78 @@ extern "C" {
     ) -> i32;
     fn cruspy_call_static_str(fqn: *const c_char, method: *const c_char, out: *mut c_char, capacity: usize)
         -> i32;
+    fn cruspy_register_python_method(fqn: *const c_char, method: *const c_char) -> i32;
+    fn cruspy_resolve_handle_fqn(handle: *const MemoryHandle, out: *mut c_char, capacity: usize) -> i32;
+}
+
+fn fqn_from_handle(handle: &MemoryHandle) -> String {
+    let mut buf = vec![0u8; 256];
+    let rc = unsafe {
+        cruspy_resolve_handle_fqn(
+            handle,
+            buf.as_mut_ptr() as *mut c_char,
+            buf.len(),
+        )
+    };
+    if rc >= 0 {
+        let json = unsafe { CStr::from_ptr(buf.as_ptr() as *const c_char) };
+        return json.to_string_lossy().into_owned();
+    }
+    let end = handle
+        .type_fqn
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(handle.type_fqn.len());
+    String::from_utf8_lossy(&handle.type_fqn[..end]).into_owned()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn cruspy_dispatch_python_f64(
+    handle: *const MemoryHandle,
+    method: *const c_char,
+    arg0: *const c_char,
+    arg1: *const c_char,
+    out: *mut f64,
+) -> i32 {
+    if handle.is_null() || method.is_null() || out.is_null() {
+        return -1;
+    }
+    let method_name = match CStr::from_ptr(method).to_str() {
+        Ok(name) => name.to_string(),
+        Err(_) => return -1,
+    };
+    let arg0_str = if arg0.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(arg0).to_string_lossy().into_owned()
+    };
+    let arg1_str = if arg1.is_null() {
+        String::new()
+    } else {
+        CStr::from_ptr(arg1).to_string_lossy().into_owned()
+    };
+    let result = Python::with_gil(|py| -> PyResult<f64> {
+        let fqn = fqn_from_handle(&*handle);
+        let key = (fqn, method_name);
+        let guard = python_methods()
+            .lock()
+            .map_err(|_| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("python method registry lock poisoned"))?;
+        let callable = guard.get(&key).ok_or_else(|| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "no python method registered for {:?}",
+                key
+            ))
+        })?;
+        let wrapper = PyMemoryHandle { inner: *handle };
+        callable.bind(py).call1((wrapper, arg0_str, arg1_str))?.extract()
+    });
+    match result {
+        Ok(value) => {
+            *out = value;
+            0
+        }
+        Err(_) => -2,
+    }
 }
 
 #[pyclass(name = "MemoryHandle", module = "pymergetic.cruspy.runtime")]
@@ -268,19 +340,7 @@ impl PyMemoryHandle {
     }
 
     #[pyo3(signature = (method, arg0=None, arg1=None))]
-    fn call_f64(&self, py: Python<'_>, method: &str, arg0: Option<&str>, arg1: Option<&str>) -> PyResult<f64> {
-        let fqn = self.type_fqn();
-        let key = (fqn.clone(), method.to_string());
-        if let Ok(guard) = python_methods().lock() {
-            if let Some(callable) = guard.get(&key) {
-                let bound = callable.bind(py);
-                let a0 = arg0.unwrap_or("");
-                let a1 = arg1.unwrap_or("");
-                let wrapper = PyMemoryHandle { inner: self.inner };
-                let result = bound.call1((wrapper, a0, a1))?;
-                return result.extract();
-            }
-        }
+    fn call_f64(&self, method: &str, arg0: Option<&str>, arg1: Option<&str>) -> PyResult<f64> {
         let cmethod = CString::new(method).map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("invalid method"))?;
         let c0 = CString::new(arg0.unwrap_or("")).unwrap();
         let c1 = CString::new(arg1.unwrap_or("")).unwrap();
@@ -427,11 +487,19 @@ fn describe(fqn: &str) -> PyResult<String> {
 #[pyfunction]
 fn method_impl(_py: Python<'_>, model_class: Bound<'_, PyAny>, method_name: &str, func: Bound<'_, PyAny>) -> PyResult<()> {
     let fqn: String = model_class.getattr("_FQN")?.extract()?;
+    let cfqn = CString::new(fqn.clone()).map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("invalid fqn"))?;
+    let cmethod =
+        CString::new(method_name).map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("invalid method"))?;
+    let rc = unsafe { cruspy_register_python_method(cfqn.as_ptr(), cmethod.as_ptr()) };
+    if rc != 0 {
+        return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+            "register_python_method failed ({rc})"
+        )));
+    }
     let key = (fqn, method_name.to_string());
     if let Ok(mut guard) = python_methods().lock() {
         guard.insert(key, func.clone().unbind());
     }
-    model_class.setattr(method_name, func)?;
     Ok(())
 }
 

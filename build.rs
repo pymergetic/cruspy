@@ -90,6 +90,8 @@ fn walk_cpp(dir: &Path, out: &mut Vec<PathBuf>) {
                 out.push(path);
             } else if name.ends_with(".cpp") && path.to_string_lossy().contains("/models/") {
                 out.push(path);
+            } else if name == "__init__.cpp" && path.to_string_lossy().contains("/testing/") {
+                out.push(path);
             }
         }
     }

@@ -70,7 +70,7 @@ class {{ sm.name }}:
 {% elif m.kind == "instance" and m.returns_f64 %}
 {% if m.impl == "python" %}
     def {{ m.name }}(self, {% for a in m.args %}{{ a.name }}: {{ a.py_type }}{% if a.py_default %} = {{ a.py_default }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}) -> float:
-        raise NotImplementedError("implement via method_impl() in __init__.py")
+        return self._handle.call_f64("{{ m.name }}"{% for a in m.args %}, {{ a.name }}{% endfor %})
 
 {% else %}
     def {{ m.name }}(self, {% for a in m.args %}{{ a.name }}: {{ a.py_type }}{% if a.py_default %} = {{ a.py_default }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}) -> float:
