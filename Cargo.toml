@@ -1,0 +1,22 @@
+[package]
+name = "pymergetic-cruspy"
+version = "0.0.0"
+edition = "2021"
+description = "cruspy — polyglot shared-memory runtime"
+license = "Apache-2.0"
+
+[lib]
+name = "pymergetic_cruspy"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+
+[features]
+default = []
+
+[package.metadata.maturin]
+name = "pymergetic.cruspy"
+
+[package.metadata]
+repository = "https://github.com/pymergetic/cruspy"

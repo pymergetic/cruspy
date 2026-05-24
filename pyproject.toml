@@ -1,0 +1,53 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[tool.uv]
+no-build-isolation-package = ["pymergetic-cruspy"]
+
+[project]
+name = "pymergetic-cruspy"
+version = "0.0.0"
+description = "Polyglot shared-memory runtime (import as pymergetic.cruspy)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [
+  { name = "PymergeticOS Maintainers", email = "raudzus@pymergetic.com" }
+]
+keywords = ["cruspy", "pymergetic-cruspy", "shm", "pydantic", "pymergetic"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: C++",
+  "Programming Language :: Rust",
+  "Operating System :: POSIX :: Linux",
+  "Typing :: Typed",
+]
+
+dependencies = [
+  "pymergetic-common[config]>=0.0.0",
+  "pydantic>=2,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/pymergetic/cruspy"
+Repository = "https://github.com/pymergetic/cruspy"
+Issues = "https://github.com/pymergetic/cruspy/issues"
+
+[project.optional-dependencies]
+test = ["pymergetic-common[test]"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "pymergetic.cruspy"
+python-source = "python"
+
+[tool.pyright]
+extraPaths = ["python"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
