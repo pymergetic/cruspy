@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
-# EP-0012 codegen staleness — skipped until exporter is wired (EP-0020 optional freeze).
+# EP-0021 codegen staleness check.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-if compgen -G "${ROOT}/src/pymergetic/cruspy/**/__init__.rs" > /dev/null 2>&1; then
-  echo "TODO: compare __init__.rs / __init__.pyi against registry snapshot"
-  exit 0
-fi
-echo "codegen staleness check: no generated __init.rs files yet — skipped"
+cd "${ROOT}"
+uv run --with pyyaml --with jinja2 python tools/cruspy-gen/cruspy_gen.py --root src/pymergetic/cruspy --glob "models/**/*.openapi.yaml" --check
+echo "codegen staleness check OK"

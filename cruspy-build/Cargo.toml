@@ -1,0 +1,8 @@
+[package]
+name = "cruspy-build"
+version = "0.1.0"
+edition = "2021"
+description = "Build-time helpers for cruspy OpenAPI codegen (EP-0021)"
+
+[lib]
+path = "src/lib.rs"

@@ -39,11 +39,26 @@ def is_namespace_only(module_dir: Path) -> bool:
     return any(p.is_dir() for p in module_dir.iterdir())
 
 
+def is_openapi_model_dir(module_dir: Path) -> bool:
+    return any(module_dir.glob("*.openapi.yaml"))
+
+
+def is_openapi_model_tree(module_dir: Path) -> bool:
+    if is_openapi_model_dir(module_dir):
+        return True
+    for parent in module_dir.parents:
+        if parent in {SRC, PACKAGE_ROOT}:
+            break
+        if is_openapi_model_dir(parent):
+            return True
+    return False
+
+
 def language_owners(module_dir: Path) -> list[str]:
     owners: list[str] = []
-    if (module_dir / "_init.hpp").exists() or (module_dir / "_init.cpp").exists():
+    if (module_dir / "__init__.hpp").exists() or (module_dir / "__init__.cpp").exists():
         owners.append("cpp")
-    if (module_dir / "_init.rs").exists():
+    if (module_dir / "__init__.rs").exists():
         owners.append("rust")
     py = module_dir / "__init__.py"
     if py.exists() and not (module_dir == PACKAGE_ROOT):
@@ -63,7 +78,10 @@ def check_single_language_supremacy() -> list[str]:
     errors: list[str] = []
     for module_dir in module_dirs(SRC):
         if module_dir == PACKAGE_ROOT:
-            # Rust _init.rs + generated __init__.py + _native.so allowed
+            # Rust __init__.rs + generated __init__.py + _native.so allowed
+            continue
+        if is_openapi_model_tree(module_dir):
+            # EP-0021 polyglot models: __init__.* + {stem}_gen.*
             continue
         owners = language_owners(module_dir)
         if len(owners) > 1:
@@ -72,18 +90,18 @@ def check_single_language_supremacy() -> list[str]:
             continue
         if len(owners) == 0 and not is_namespace_only(module_dir):
             rel = module_dir.relative_to(ROOT)
-            errors.append(f"no language owner (need _init.hpp, _init.rs, or __init__.py): {rel}")
+            errors.append(f"no language owner (need __init__.* or models openapi): {rel}")
     return errors
 
 
 def check_handwritten_py() -> list[str]:
     errors: list[str] = []
     for path in SRC.rglob("*.py"):
-        if path.name == "__init__.py" and path.parent == PACKAGE_ROOT:
+        if path.name == "__init__.py":
             continue
-        if path.name == "__init__.py" and path.parent.parent.name == "pymergetic":
+        if path.name.endswith("_gen.py"):
             continue
-        errors.append(f"hand-written .py forbidden outside package root: {path.relative_to(ROOT)}")
+        errors.append(f"hand-written .py forbidden (use __init__.py): {path.relative_to(ROOT)}")
     return errors
 
 

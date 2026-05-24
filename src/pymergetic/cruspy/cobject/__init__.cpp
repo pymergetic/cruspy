@@ -1,4 +1,4 @@
-#include "_init.hpp"
+#include "__init__.hpp"
 
 namespace pymergetic::cruspy::cobject {
 

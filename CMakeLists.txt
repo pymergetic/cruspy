@@ -17,9 +17,21 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(reflect_cpp)
 
 set(CRUSPY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src/pymergetic/cruspy")
-file(GLOB_RECURSE CRUSPY_CPP_SOURCES CONFIGURE_DEPENDS "${CRUSPY_ROOT}/*/_init.cpp")
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/CruspyGen.cmake")
+cruspy_gen_models("${CRUSPY_ROOT}")
+
+file(GLOB_RECURSE CRUSPY_CPP_SOURCES CONFIGURE_DEPENDS
+    "${CRUSPY_ROOT}/*/__init__.cpp"
+    "${CRUSPY_ROOT}/**/*_gen.cpp"
+)
+file(GLOB_RECURSE CRUSPY_MODEL_HAND_CPP CONFIGURE_DEPENDS
+    "${CRUSPY_ROOT}/models/**/__init__.cpp"
+)
+list(APPEND CRUSPY_CPP_SOURCES ${CRUSPY_MODEL_HAND_CPP})
 
 add_library(cruspy_clangd OBJECT ${CRUSPY_CPP_SOURCES})
+add_dependencies(cruspy_clangd cruspy_gen)
 target_include_directories(cruspy_clangd PRIVATE
     "${CRUSPY_ROOT}"
     "${reflect_cpp_SOURCE_DIR}/include"

@@ -1,4 +1,4 @@
-#include "_init.hpp"
+#include "__init__.hpp"
 
 int cruspy_substrate_handle_valid(const pymergetic::cruspy::substrate::MemoryHandle* handle) {
     if (handle == nullptr) {

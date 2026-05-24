@@ -1,9 +1,11 @@
-"""Phases 1–4: substrate, allocator, registry, models + runtime."""
+"""Phases 1–5: substrate, allocator, registry, models, methods (EP-0021)."""
 
 from __future__ import annotations
 
 import json
 
+from pymergetic.cruspy.models.document import Document
+from pymergetic.cruspy.models.document.metadata import Metadata
 from pymergetic.cruspy.runtime import create, describe, domain_stats_json
 
 METADATA_FQN = "pymergetic.cruspy.models.document.metadata.Metadata"
@@ -28,18 +30,42 @@ def test_document_create_and_fields() -> None:
     handle = create(DOCUMENT_FQN, domain="heap_default")
     handle.set_field_i32("id", 7)
     handle.set_field_f64("score", 0.875)
+    handle.set_field_bool("active", True)
     assert handle.field_i32("id") == 7
     assert abs(handle.field_f64("score") - 0.875) < 1e-9
+    assert handle.field_bool("active") is True
 
 
 def test_describe_document() -> None:
     spec = json.loads(describe(DOCUMENT_FQN))
     assert spec["fqn"] == DOCUMENT_FQN
     fields = {f["name"]: f for f in spec["fields"]}
-    assert set(fields) == {"id", "score", "meta"}
-    assert fields["id"]["desc"] == "Primary identifier"
+    assert set(fields) == {"id", "score", "active", "meta"}
+    assert fields["id"]["desc"] == "Primary identifier."
     assert fields["id"]["default"] == 0
     assert fields["id"]["min"] == 0
     assert fields["id"]["max"] == 100
-    assert fields["score"]["desc"] == "Relevance score"
+    assert fields["score"]["desc"] == "Relevance score."
     assert spec["schema_hash"] > 0
+
+
+def test_typed_document() -> None:
+    doc = Document(domain="heap_default", id=7, score=0.875, active=True)
+    assert doc.id == 7
+    assert abs(doc.score - 0.875) < 1e-9
+    assert doc.active is True
+
+
+def test_nested_meta_and_active() -> None:
+    doc = Document(id=1, score=0.5)
+    doc.meta.id = 42
+    doc.meta.created_at = 1_700_000_000
+    assert doc.meta.id == 42
+    assert doc.meta.created_at == 1_700_000_000
+    doc.active = False
+    assert doc.active is False
+
+    meta = Metadata(id=99, created_at=123)
+    doc2 = Document(id=2, score=0.1, meta=meta)
+    assert doc2.meta.id == 99
+    assert doc2.meta.created_at == 123

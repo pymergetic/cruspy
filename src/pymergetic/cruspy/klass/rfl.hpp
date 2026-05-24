@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../module/_init.hpp"
-#include "../registry/_init.hpp"
+#include "../module/__init__.hpp"
+#include "../registry/__init__.hpp"
 #include "detail.hpp"
 #include "meta.hpp"
 

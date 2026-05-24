@@ -9,7 +9,8 @@ namespace pymergetic::cruspy::substrate {
 inline constexpr uint32_t kMemoryAbiVersion = 1;
 inline constexpr uint32_t kHandleFlagNone = 0x00;
 inline constexpr uint32_t kHandleFlagTyped = 0x01;
-inline constexpr uint32_t kHandleFlagStaleCheck = 0x04;
+inline constexpr uint32_t kHandleFlagStaleCheck = 0x02;
+inline constexpr uint32_t kHandleFlagEmbedded = 0x08;
 
 struct DomainId {
     uint64_t high{};
@@ -25,6 +26,7 @@ struct MemoryHandle {
     uint64_t byte_size{};
     uint64_t schema_hash{};
     uint64_t generation{};
+    uint64_t embedded_offset{};
     char type_fqn[24]{};
 };
 

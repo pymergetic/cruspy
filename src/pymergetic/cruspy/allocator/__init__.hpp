@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../substrate/_init.hpp"
+#include "../substrate/__init__.hpp"
 
 #include <cstddef>
 #include <cstdint>

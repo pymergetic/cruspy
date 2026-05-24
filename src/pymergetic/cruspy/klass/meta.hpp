@@ -1,6 +1,6 @@
 #pragma once
 
-#include "_init.hpp"
+#include "__init__.hpp"
 #include "detail.hpp"
 
 #include <cstdint>
@@ -30,8 +30,9 @@ struct FieldMember<Member> {
 
 template <typename T>
 inline constexpr bool is_object_storage_v =
-    !std::is_same_v<std::remove_cvref_t<T>, int32_t> && !std::is_same_v<std::remove_cvref_t<T>, double> &&
-    !std::is_same_v<std::remove_cvref_t<T>, float>;
+    !std::is_same_v<std::remove_cvref_t<T>, int32_t> && !std::is_same_v<std::remove_cvref_t<T>, int64_t> &&
+    !std::is_same_v<std::remove_cvref_t<T>, double> && !std::is_same_v<std::remove_cvref_t<T>, float> &&
+    !std::is_same_v<std::remove_cvref_t<T>, bool>;
 
 template <typename T>
 struct storage_kind_of {
@@ -43,12 +44,20 @@ struct storage_kind_of<int32_t> {
     static constexpr field::StorageKind value = field::StorageKind::I32;
 };
 template <>
+struct storage_kind_of<int64_t> {
+    static constexpr field::StorageKind value = field::StorageKind::I64;
+};
+template <>
 struct storage_kind_of<double> {
     static constexpr field::StorageKind value = field::StorageKind::F64;
 };
 template <>
 struct storage_kind_of<float> {
     static constexpr field::StorageKind value = field::StorageKind::F64;
+};
+template <>
+struct storage_kind_of<bool> {
+    static constexpr field::StorageKind value = field::StorageKind::Bool;
 };
 
 template <typename T>

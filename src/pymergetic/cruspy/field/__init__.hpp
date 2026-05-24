@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../cobject/_init.hpp"
+#include "../cobject/__init__.hpp"
 
 #include <rfl/internal/StringLiteral.hpp>
 
@@ -13,7 +13,9 @@ namespace pymergetic::cruspy::field {
 
 enum class StorageKind : uint8_t {
     I32,
+    I64,
     F64,
+    Bool,
     Object,
 };
 
@@ -58,8 +60,10 @@ struct Attrs {
 namespace detail {
 
 inline std::string repr(int32_t value) { return std::to_string(value); }
+inline std::string repr(int64_t value) { return std::to_string(value); }
 inline std::string repr(double value) { return std::to_string(value); }
 inline std::string repr(float value) { return std::to_string(value); }
+inline std::string repr(bool value) { return value ? "true" : "false"; }
 
 template <typename Value>
 inline std::string repr(const Value&) {

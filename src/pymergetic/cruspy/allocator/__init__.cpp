@@ -1,6 +1,6 @@
-#include "_init.hpp"
+#include "__init__.hpp"
 
-#include "../module/_init.hpp"
+#include "../module/__init__.hpp"
 
 #include <cstdio>
 #include <cstring>

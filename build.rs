@@ -9,11 +9,15 @@ fn main() {
     let cruspy_root = manifest_dir.join("src/pymergetic/cruspy");
 
     println!("cargo:rerun-if-changed=src/pymergetic/cruspy");
+    println!("cargo:rerun-if-changed=tools/cruspy-gen");
+
+    cruspy_build::gen_models_glob(&manifest_dir, &cruspy_root, "models/**/*.openapi.yaml")
+        .expect("cruspy-gen failed");
 
     let reflect_cpp = ensure_reflect_cpp(&out_dir);
     println!("cargo:rerun-if-changed={}", reflect_cpp.join("include/rfl/Field.hpp").display());
 
-    let cpp_files = collect_init_cpp(&cruspy_root);
+    let cpp_files = collect_cpp_sources(&cruspy_root);
     for path in &cpp_files {
         println!("cargo:rerun-if-changed={}", path.display());
     }
@@ -64,14 +68,14 @@ fn ensure_reflect_cpp(out_dir: &Path) -> PathBuf {
     dest
 }
 
-fn collect_init_cpp(root: &Path) -> Vec<PathBuf> {
+fn collect_cpp_sources(root: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
-    walk_init_cpp(root, &mut files);
+    walk_cpp(root, &mut files);
     files.sort();
     files
 }
 
-fn walk_init_cpp(dir: &Path, out: &mut Vec<PathBuf>) {
+fn walk_cpp(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(_) => return,
@@ -80,9 +84,13 @@ fn walk_init_cpp(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            walk_init_cpp(&path, out);
-        } else if path.file_name().and_then(|n| n.to_str()) == Some("_init.cpp") {
-            out.push(path);
+            walk_cpp(&path, out);
+        } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if name.ends_with("_gen.cpp") || name.ends_with("__init__.cpp") {
+                out.push(path);
+            } else if name.ends_with(".cpp") && path.to_string_lossy().contains("/models/") {
+                out.push(path);
+            }
         }
     }
 }
