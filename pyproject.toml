@@ -52,12 +52,13 @@ document = "pymergetic.cruspy.models.document"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
-module-name = "pymergetic.cruspy"
-python-source = "python"
+module-name = "pymergetic.cruspy._native"
+python-source = "src"
 bindings = "pyo3"
 
 [tool.pyright]
-extraPaths = ["python"]
+extraPaths = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]

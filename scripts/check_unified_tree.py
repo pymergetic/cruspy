@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Validate EP-0010 unified source tree for cruspy."""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src" / "pymergetic" / "cruspy"
+LEGACY_NAMES = {"mod.hpp", "mod.cpp", "mod.rs", "mod.gen.rs"}
+PACKAGE_ROOT = SRC
+
+
+def module_dirs(base: Path) -> list[Path]:
+    dirs = [base]
+    for path in base.rglob("*"):
+        if path.is_dir() and path.name not in {"__pycache__", ".git"}:
+            dirs.append(path)
+    return sorted(set(dirs))
+
+
+def is_namespace_only(module_dir: Path) -> bool:
+    """Directory with subdirs but no implementation artifacts."""
+    for child in module_dir.iterdir():
+        if child.is_dir():
+            continue
+        name = child.name
+        if name.startswith("_native") and name.endswith(".so"):
+            continue
+        if name == "__init__.py" and module_dir == PACKAGE_ROOT:
+            continue
+        if name in {"__init__.pyi", "__init__.rs"}:
+            continue
+        if name.startswith(".") or name == "__pycache__":
+            continue
+        return False
+    return any(p.is_dir() for p in module_dir.iterdir())
+
+
+def language_owners(module_dir: Path) -> list[str]:
+    owners: list[str] = []
+    if (module_dir / "_init.hpp").exists() or (module_dir / "_init.cpp").exists():
+        owners.append("cpp")
+    if (module_dir / "_init.rs").exists():
+        owners.append("rust")
+    py = module_dir / "__init__.py"
+    if py.exists() and not (module_dir == PACKAGE_ROOT):
+        owners.append("python")
+    return owners
+
+
+def check_legacy_files() -> list[str]:
+    errors: list[str] = []
+    for path in SRC.rglob("*"):
+        if path.name in LEGACY_NAMES:
+            errors.append(f"legacy file forbidden: {path.relative_to(ROOT)}")
+    return errors
+
+
+def check_single_language_supremacy() -> list[str]:
+    errors: list[str] = []
+    for module_dir in module_dirs(SRC):
+        if module_dir == PACKAGE_ROOT:
+            # Rust _init.rs + generated __init__.py + _native.so allowed
+            continue
+        owners = language_owners(module_dir)
+        if len(owners) > 1:
+            rel = module_dir.relative_to(ROOT)
+            errors.append(f"multiple language owners {owners}: {rel}")
+            continue
+        if len(owners) == 0 and not is_namespace_only(module_dir):
+            rel = module_dir.relative_to(ROOT)
+            errors.append(f"no language owner (need _init.hpp, _init.rs, or __init__.py): {rel}")
+    return errors
+
+
+def check_handwritten_py() -> list[str]:
+    errors: list[str] = []
+    for path in SRC.rglob("*.py"):
+        if path.name == "__init__.py" and path.parent == PACKAGE_ROOT:
+            continue
+        if path.name == "__init__.py" and path.parent.parent.name == "pymergetic":
+            continue
+        errors.append(f"hand-written .py forbidden outside package root: {path.relative_to(ROOT)}")
+    return errors
+
+
+def check_python_imports() -> list[str]:
+    errors: list[str] = []
+    bare = re.compile(r"^\s*(from|import)\s+cruspy\b", re.MULTILINE)
+    for path in list(ROOT.rglob("*.py")):
+        if ".pytest_cache" in path.parts:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if bare.search(text):
+            errors.append(f"bare 'cruspy' import forbidden: {path.relative_to(ROOT)}")
+    return errors
+
+
+def check_forbidden_bindings() -> list[str]:
+    errors: list[str] = []
+    patterns = [
+        (re.compile(r"#include\s*<Python\.h>"), "Python.h in C++"),
+        (re.compile(r"\bcxx::"), "cxx:: bridge"),
+        (re.compile(r"\bnanobind\b"), "nanobind"),
+    ]
+    for path in (ROOT / "src").rglob("*"):
+        if not path.is_file() or path.suffix not in {".hpp", ".cpp", ".rs", ".py"}:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for pattern, label in patterns:
+            if pattern.search(text):
+                errors.append(f"{label} forbidden: {path.relative_to(ROOT)}")
+    return errors
+
+
+def main() -> int:
+    errors: list[str] = []
+    if not SRC.is_dir():
+        print(f"ERROR: expected tree at {SRC}", file=sys.stderr)
+        return 1
+
+    errors.extend(check_legacy_files())
+    errors.extend(check_single_language_supremacy())
+    errors.extend(check_handwritten_py())
+    errors.extend(check_python_imports())
+    errors.extend(check_forbidden_bindings())
+
+    if errors:
+        print("Unified tree check FAILED:", file=sys.stderr)
+        for err in errors:
+            print(f"  - {err}", file=sys.stderr)
+        return 1
+
+    print(f"Unified tree OK ({len(module_dirs(SRC))} module dirs under {SRC.relative_to(ROOT)})")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
