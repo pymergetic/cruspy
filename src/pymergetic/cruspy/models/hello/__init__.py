@@ -13,4 +13,4 @@ def hello_python(self) -> bytes:
     return f"Hello from Python — {self.field_string('message')}".encode("utf-8")
 
 
-CRUSPY_REGISTER_METHOD(Hello, "hello_python", hello_python)
+CRUSPY_REGISTER_METHOD(Hello, hello_python)

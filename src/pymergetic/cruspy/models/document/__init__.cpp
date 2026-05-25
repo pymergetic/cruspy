@@ -58,11 +58,11 @@ int document_schema(const char* fqn, char* out, std::size_t capacity) {
 
 }  // namespace pymergetic::cruspy::models::document
 
-CRUSPY_REGISTER_METHOD(pymergetic::cruspy::models::document::DocumentLayout, validate,
+CRUSPY_REGISTER_METHOD(pymergetic::cruspy::models::document::Document, validate,
                        pymergetic::cruspy::models::document::document_validate)
-CRUSPY_REGISTER_METHOD(pymergetic::cruspy::models::document::DocumentLayout, normalize,
+CRUSPY_REGISTER_METHOD(pymergetic::cruspy::models::document::Document, normalize,
                        pymergetic::cruspy::models::document::document_normalize)
-CRUSPY_REGISTER_METHOD(pymergetic::cruspy::models::document::DocumentLayout, default_domain,
+CRUSPY_REGISTER_METHOD(pymergetic::cruspy::models::document::Document, default_domain,
                        pymergetic::cruspy::models::document::document_default_domain)
-CRUSPY_REGISTER_METHOD(pymergetic::cruspy::models::document::DocumentLayout, schema,
+CRUSPY_REGISTER_METHOD(pymergetic::cruspy::models::document::Document, schema,
                        pymergetic::cruspy::models::document::document_schema)

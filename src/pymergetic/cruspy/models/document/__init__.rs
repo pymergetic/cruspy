@@ -214,5 +214,5 @@ pub unsafe extern "C" fn document_from_json(
     0
 }
 
-CRUSPY_REGISTER_METHOD!(FQN, "serialize", document_serialize);
-CRUSPY_REGISTER_METHOD!(FQN, "from_json", document_from_json);
+CRUSPY_REGISTER_METHOD!(Document, serialize, document_serialize);
+CRUSPY_REGISTER_METHOD!(Document, from_json, document_from_json);

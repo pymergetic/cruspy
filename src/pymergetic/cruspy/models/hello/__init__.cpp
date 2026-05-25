@@ -27,5 +27,5 @@ int hello_cpp(const substrate::MemoryHandle* handle, std::uint8_t* out, std::siz
 
 }  // namespace pymergetic::cruspy::models::hello
 
-CRUSPY_REGISTER_METHOD(pymergetic::cruspy::models::hello::HelloLayout, hello_cpp,
+CRUSPY_REGISTER_METHOD(pymergetic::cruspy::models::hello::Hello, hello_cpp,
                        pymergetic::cruspy::models::hello::hello_cpp)

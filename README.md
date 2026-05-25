@@ -37,7 +37,7 @@ the other languages.
 int hello_cpp(const MemoryHandle* handle, uint8_t* out, size_t capacity) {
     // read message field, write "Hello from C++ — …" bytes
 }
-CRUSPY_REGISTER_METHOD(HelloLayout, hello_cpp, hello_cpp)
+CRUSPY_REGISTER_METHOD(Hello, hello_cpp, hello_cpp)
 ```
 
 **Rust** defines `hello_rust`:
@@ -48,7 +48,7 @@ CRUSPY_REGISTER_METHOD(HelloLayout, hello_cpp, hello_cpp)
 pub unsafe extern "C" fn hello_rust(handle: *const MemoryHandle, out: *mut u8, cap: usize) -> i32 {
     // read message field, write "Hello from Rust — …" bytes
 }
-CRUSPY_REGISTER_METHOD!(FQN, "hello_rust", hello_rust);
+CRUSPY_REGISTER_METHOD!(Hello, hello_rust, hello_rust);
 ```
 
 **Python** defines `hello_python`:
@@ -58,11 +58,12 @@ CRUSPY_REGISTER_METHOD!(FQN, "hello_rust", hello_rust);
 def hello_python(self) -> bytes:
     return f"Hello from Python — {self.field_string('message')}".encode()
 
-CRUSPY_REGISTER_METHOD(Hello, "hello_python", hello_python)
+CRUSPY_REGISTER_METHOD(Hello, hello_python)
 ```
 
-Same macro name in every language — ``CRUSPY_REGISTER_METHOD``. The file you're
-in already tells you which lang you are registering.
+All three use the **same model type** — ``Hello`` — and the same macro name —
+``CRUSPY_REGISTER_METHOD``. Args are always ``(Model, method_name, function)``;
+Python omits the method name string when it matches the function name.
 
 ### Call — usage from every language
 

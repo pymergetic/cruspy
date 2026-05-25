@@ -29,4 +29,4 @@ pub unsafe extern "C" fn hello_rust(
     greeting.len() as i32
 }
 
-CRUSPY_REGISTER_METHOD!(FQN, "hello_rust", hello_rust);
+CRUSPY_REGISTER_METHOD!(Hello, hello_rust, hello_rust);

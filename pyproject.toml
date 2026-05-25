@@ -53,6 +53,7 @@ test = ["pymergetic-common[test]"]
 
 [project.entry-points."pymergetic.cruspy.components"]
 document = "pymergetic.cruspy.models.document"
+hello = "pymergetic.cruspy.models.hello"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]

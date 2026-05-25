@@ -22,7 +22,7 @@ pub fn init_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     runtime::register(m)?;
     shm::register(m)?;
-    runtime::finalize_python_methods(m.py(), m)?;
+    runtime::discover(m.py())?;
     testing::register(m)?;
     Ok(())
 }

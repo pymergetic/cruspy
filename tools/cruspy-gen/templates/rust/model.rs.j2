@@ -43,6 +43,8 @@ pub struct {{ sm.name }} {
 }
 
 impl {{ sm.name }} {
+    pub const FQN: &'static str = "{{ sm.fqn }}";
+
     pub fn new(domain: &str, init: {{ sm.name }}Init) -> Result<Self, CruspyError> {
         let mut doc = Self {
             handle: kernel::create_object(FQN, domain)?,

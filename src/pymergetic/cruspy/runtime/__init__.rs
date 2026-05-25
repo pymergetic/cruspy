@@ -4,31 +4,17 @@
 pub mod kernel;
 
 use pyo3::prelude::*;
-use pyo3::types::{PyModule, PyType};
+use pyo3::types::{PyDict, PyModule, PyType};
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::sync::{Mutex, OnceLock};
 
-/// Harmonized module path — mirrors ``pymergetic::cruspy::module::kPackageRoot`` (C++).
-pub struct ModulePath(&'static str);
+const RUNTIME_MODULE: &str = "pymergetic.cruspy.runtime";
 
-impl ModulePath {
-    pub const ROOT: Self = Self("pymergetic.cruspy");
-    pub const RUNTIME: Self = Self("pymergetic.cruspy.runtime");
-
-    pub const fn new(path: &'static str) -> Self {
-        Self(path)
-    }
-
-    pub fn as_str(self) -> &'static str {
-        self.0
-    }
-
-    pub fn ensure(self) {
-        let path = CString::new(self.0).expect("module path contains NUL");
-        unsafe { cruspy_module_ensure(path.as_ptr()) };
-    }
+fn ensure_runtime_module() {
+    let path = CString::new(RUNTIME_MODULE).expect("module path contains NUL");
+    unsafe { cruspy_module_ensure(path.as_ptr()) };
 }
 
 #[repr(C)]
@@ -665,20 +651,36 @@ fn describe(fqn: &str) -> PyResult<String> {
 }
 
 #[pyfunction(name = "CRUSPY_REGISTER_METHOD")]
-fn cruspy_register_method(_py: Python<'_>, model_class: Bound<'_, PyAny>, method_name: &str, func: Bound<'_, PyAny>) -> PyResult<()> {
+#[pyo3(signature = (model_class, method_name, func = None))]
+fn cruspy_register_method(
+    _py: Python<'_>,
+    model_class: Bound<'_, PyAny>,
+    method_name: Bound<'_, PyAny>,
+    func: Option<Bound<'_, PyAny>>,
+) -> PyResult<()> {
+    let (registered_name, impl_func) = match func {
+        None => {
+            let name: String = method_name.getattr("__name__")?.extract()?;
+            (name, method_name)
+        }
+        Some(f) => {
+            let name: String = method_name.extract()?;
+            (name, f)
+        }
+    };
     let fqn: String = model_class.getattr("_FQN")?.extract()?;
     let cfqn = CString::new(fqn.clone()).map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("invalid fqn"))?;
-    let cmethod =
-        CString::new(method_name).map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("invalid method"))?;
+    let cmethod = CString::new(registered_name.as_str())
+        .map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("invalid method"))?;
     let rc = unsafe { cruspy_register_python_method(cfqn.as_ptr(), cmethod.as_ptr()) };
     if rc != 0 {
         return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
             "register_python_method failed ({rc})"
         )));
     }
-    let key = (fqn, method_name.to_string());
+    let key = (fqn, registered_name);
     if let Ok(mut guard) = python_methods().lock() {
-        guard.insert(key.clone(), func.clone().unbind());
+        guard.insert(key.clone(), impl_func.clone().unbind());
     }
     let rc_bind = unsafe { cruspy_bind_python_method(cfqn.as_ptr(), cmethod.as_ptr(), PY_METHOD_BOUND) };
     if rc_bind != 0 {
@@ -689,8 +691,31 @@ fn cruspy_register_method(_py: Python<'_>, model_class: Bound<'_, PyAny>, method
     Ok(())
 }
 
+/// Discover and import model components (EP-0013). Scans
+/// ``pymergetic.cruspy.components`` entry points and the generated
+/// ``pymergetic.cruspy.models`` package — never individual model names.
+pub fn discover(py: Python<'_>) -> PyResult<()> {
+    let metadata = py.import("importlib.metadata")?;
+    let kwargs = PyDict::new(py);
+    kwargs.set_item("group", "pymergetic.cruspy.components")?;
+    let eps = metadata.call_method("entry_points", (), Some(&kwargs))?;
+    for ep in eps.try_iter()? {
+        ep?.call_method0("load")?;
+    }
+    let _ = py.import("pymergetic.cruspy.models");
+    unsafe {
+        cruspy_resolve_python_methods(std::ptr::null_mut());
+    }
+    Ok(())
+}
+
+#[pyfunction]
+fn discover_py(py: Python<'_>) -> PyResult<()> {
+    discover(py)
+}
+
 pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
-    ModulePath::RUNTIME.ensure();
+    ensure_runtime_module();
     unsafe {
         cruspy_bootstrap();
     };
@@ -702,20 +727,12 @@ pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(create, &m)?)?;
     m.add_function(wrap_pyfunction!(describe, &m)?)?;
     m.add_function(wrap_pyfunction!(cruspy_register_method, &m)?)?;
+    m.add_function(wrap_pyfunction!(discover_py, &m)?)?;
     m.add_function(wrap_pyfunction!(clone_handle, &m)?)?;
     m.add_function(wrap_pyfunction!(patch_field_schema_hash, &m)?)?;
     parent.add_submodule(&m)?;
     py.import("sys")?
         .getattr("modules")?
         .set_item("pymergetic.cruspy.runtime", &m)?;
-    Ok(())
-}
-
-pub fn finalize_python_methods(py: Python<'_>, parent: &Bound<'_, PyModule>) -> PyResult<()> {
-    let _ = py.import("pymergetic.cruspy.models.document")?;
-    let _ = py.import("pymergetic.cruspy.models.hello")?;
-    unsafe {
-        cruspy_resolve_python_methods(parent.as_ptr());
-    }
     Ok(())
 }

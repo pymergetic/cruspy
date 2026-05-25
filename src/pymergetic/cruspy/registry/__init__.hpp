@@ -163,7 +163,7 @@ int cruspy_resolve_handle_fqn(const pymergetic::cruspy::substrate::MemoryHandle*
 }
 #endif
 
-#define CRUSPY_REGISTER_METHOD(Layout, MethodName, FnPtr)                                                      \
+#define CRUSPY_REGISTER_METHOD(Model, MethodName, FnPtr)                                                       \
     namespace {                                                                                              \
     [[gnu::constructor]] void _cruspy_reg_method_##MethodName() {                                              \
         ::pymergetic::cruspy::functions::CruspyMethodSlot slot{};                                            \
@@ -171,6 +171,6 @@ int cruspy_resolve_handle_fqn(const pymergetic::cruspy::substrate::MemoryHandle*
         slot.available = ::pymergetic::cruspy::functions::kAvailCpp;                                         \
         slot.preferred = ::pymergetic::cruspy::functions::kLangCpp;                                          \
         ::pymergetic::cruspy::registry::TypeRegistry::global().register_method(                                \
-            Layout::kFqn, #MethodName, slot);                                                                  \
+            Model::kFqn, #MethodName, slot);                                                                  \
     }                                                                                                        \
     }
