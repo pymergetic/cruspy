@@ -5,13 +5,13 @@ pub mod metadata;
 
 include!("__init___gen.rs");
 
+use crate::CRUSPY_REGISTER_RUST_METHOD;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
 use crate::cruspy_root::runtime::kernel::MemoryHandle as KernelMemoryHandle;
 use serde::Deserialize;
 
-const LANG_RUST: i32 = 1;
 const SERIALIZE_MAGIC: [u8; 4] = *b"CD02";
 const SERIALIZE_SIZE: usize = 29;
 
@@ -40,12 +40,6 @@ fn default_active() -> bool {
 }
 
 extern "C" {
-    fn cruspy_register_rust_method(
-        fqn: *const c_char,
-        method: *const c_char,
-        rust_fn: *mut std::ffi::c_void,
-        preferred: i32,
-    ) -> i32;
     fn cruspy_create(fqn: *const c_char, domain_name: *const c_char, out: *mut KernelMemoryHandle) -> i32;
     fn cruspy_field_get_i32(handle: *const KernelMemoryHandle, field: *const c_char, out: *mut i32) -> i32;
     fn cruspy_field_set_i32(handle: *const KernelMemoryHandle, field: *const c_char, value: i32) -> i32;
@@ -161,7 +155,13 @@ pub unsafe extern "C" fn document_serialize(
     out: *mut u8,
     capacity: usize,
 ) -> i32 {
-    if handle.is_null() || out.is_null() || capacity < SERIALIZE_SIZE {
+    if handle.is_null() {
+        return -1;
+    }
+    if capacity == 0 {
+        return SERIALIZE_SIZE as i32;
+    }
+    if out.is_null() || capacity < SERIALIZE_SIZE {
         return -1;
     }
 
@@ -214,22 +214,5 @@ pub unsafe extern "C" fn document_from_json(
     0
 }
 
-pub fn register() {
-    let fqn = CString::new(FQN).expect("fqn");
-    let serialize = CString::new("serialize").expect("method");
-    let from_json = CString::new("from_json").expect("method");
-    unsafe {
-        cruspy_register_rust_method(
-            fqn.as_ptr(),
-            serialize.as_ptr(),
-            document_serialize as *mut std::ffi::c_void,
-            LANG_RUST,
-        );
-        cruspy_register_rust_method(
-            fqn.as_ptr(),
-            from_json.as_ptr(),
-            document_from_json as *mut std::ffi::c_void,
-            LANG_RUST,
-        );
-    }
-}
+CRUSPY_REGISTER_RUST_METHOD!(FQN, "serialize", document_serialize);
+CRUSPY_REGISTER_RUST_METHOD!(FQN, "from_json", document_from_json);

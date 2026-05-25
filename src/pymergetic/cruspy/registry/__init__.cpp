@@ -29,6 +29,8 @@ uint32_t field_size(CType type, const TypeRegistry& registry, const std::string&
             return 8;
         case CType::Bool:
             return 1;
+        case CType::String:
+            return 64;
         case CType::Object: {
             const auto* nested = registry.lookup(object_fqn);
             return nested == nullptr ? 0 : nested->size;
@@ -53,11 +55,7 @@ uint32_t align_up(uint32_t value, uint32_t alignment) {
 }
 
 std::byte* object_bytes(const substrate::MemoryHandle& handle) {
-    auto* domain = allocator::DomainRegistry::global().find(handle.domain_id);
-    if (domain == nullptr) {
-        return nullptr;
-    }
-    auto* bytes = domain->resolve_bytes(handle);
+    auto* bytes = allocator::DomainRegistry::global().resolve_bytes(handle);
     if (bytes == nullptr) {
         return nullptr;
     }
@@ -110,6 +108,8 @@ functions::CruspyMethodSlot* resolve_static_method_slot(const char* fqn, const c
 
 extern "C" int cruspy_dispatch_python_f64(const pymergetic::cruspy::substrate::MemoryHandle* handle,
                                           const char* method, const char* arg0, const char* arg1, double* out);
+extern "C" int cruspy_dispatch_python_bytes(const pymergetic::cruspy::substrate::MemoryHandle* handle,
+                                            const char* method, std::uint8_t* out, std::size_t capacity);
 
 bool dispatch_bool(functions::CruspyMethodSlot* slot, const substrate::MemoryHandle& handle, bool* out) {
     if (slot == nullptr || out == nullptr) {
@@ -167,29 +167,57 @@ bool dispatch_f64(functions::CruspyMethodSlot* slot, const substrate::MemoryHand
             return true;
         }
         if (lang == functions::kLangPython && (slot->available & functions::kAvailPython) != 0) {
-            if (cruspy_dispatch_python_f64(&handle, method, arg0, arg1, out) == 0) {
+            if (slot->py_fn != nullptr &&
+                cruspy_dispatch_python_f64(&handle, method, arg0, arg1, out) == 0) {
                 return true;
             }
+            continue;
         }
     }
     return false;
 }
 
-int dispatch_bytes(functions::CruspyMethodSlot* slot, const substrate::MemoryHandle& handle, uint8_t* out,
-                   std::size_t capacity) {
+int dispatch_bytes(functions::CruspyMethodSlot* slot, const substrate::MemoryHandle& handle, const char* method,
+                   std::uint8_t* out, std::size_t capacity) {
     if (slot == nullptr) {
         return -1;
     }
-    if (slot->rust_fn != nullptr) {
-        auto fn = reinterpret_cast<functions::MethodBytesFn>(slot->rust_fn);
-        return fn(&handle, out, capacity);
-    }
-    if (slot->cpp_fn != nullptr) {
-        auto fn = reinterpret_cast<functions::MethodBytesFn>(slot->cpp_fn);
-        return fn(&handle, out, capacity);
+    const uint8_t order[] = {slot->preferred, functions::kLangCpp, functions::kLangRust, functions::kLangPython};
+    for (uint8_t lang : order) {
+        if ((slot->available & (1u << lang)) == 0) {
+            continue;
+        }
+        if (lang == functions::kLangRust && slot->rust_fn != nullptr) {
+            auto fn = reinterpret_cast<functions::MethodBytesFn>(slot->rust_fn);
+            const int rc = fn(&handle, out, capacity);
+            if (rc >= 0) {
+                return rc;
+            }
+            continue;
+        }
+        if (lang == functions::kLangCpp && slot->cpp_fn != nullptr) {
+            auto fn = reinterpret_cast<functions::MethodBytesFn>(slot->cpp_fn);
+            return fn(&handle, out, capacity);
+        }
+        if (lang == functions::kLangPython && (slot->available & functions::kAvailPython) != 0) {
+            if (slot->py_fn != nullptr) {
+                const int rc = cruspy_dispatch_python_bytes(&handle, method, out, capacity);
+                if (rc >= 0) {
+                    return rc;
+                }
+            }
+        }
     }
     return -1;
 }
+
+constexpr std::size_t kSerializeProbeSize = 29;
+
+struct StringSlot {
+    uint32_t length;
+    char data[60];
+};
+static_assert(sizeof(StringSlot) == 64);
 
 const char* ctype_name(CType type) {
     switch (type) {
@@ -199,6 +227,8 @@ const char* ctype_name(CType type) {
             return "f64";
         case CType::Bool:
             return "bool";
+        case CType::String:
+            return "string";
         case CType::Object:
             return "object";
         default:
@@ -237,6 +267,9 @@ CKlass& CKlass::field(const field::FieldMeta& meta) {
             break;
         case field::StorageKind::Bool:
             spec.type = CType::Bool;
+            break;
+        case field::StorageKind::String:
+            spec.type = CType::String;
             break;
         case field::StorageKind::Object:
             spec.type = CType::Object;
@@ -317,6 +350,32 @@ functions::CruspyMethodSlot* TypeRegistry::method_slot(std::string_view fqn, std
     return mit == it->second.methods.end() ? nullptr : &mit->second;
 }
 
+bool TypeRegistry::bind_python_method(std::string_view fqn, std::string_view name, void* py_fn) {
+    std::lock_guard lock(mutex_);
+    const auto it = types_.find(std::string(fqn));
+    if (it == types_.end()) {
+        return false;
+    }
+    const auto mit = it->second.methods.find(std::string(name));
+    if (mit == it->second.methods.end()) {
+        return false;
+    }
+    mit->second.py_fn = py_fn;
+    return true;
+}
+
+void TypeRegistry::foreach_python_method(
+    const std::function<void(std::string_view fqn, std::string_view name, functions::CruspyMethodSlot& slot)>& fn) {
+    std::lock_guard lock(mutex_);
+    for (auto& [fqn, entry] : types_) {
+        for (auto& [name, slot] : entry.methods) {
+            if ((slot.available & functions::kAvailPython) != 0) {
+                fn(fqn, name, slot);
+            }
+        }
+    }
+}
+
 const TypeEntry* TypeRegistry::lookup(std::string_view fqn) const {
     std::lock_guard lock(mutex_);
     const auto it = types_.find(std::string(fqn));
@@ -388,6 +447,20 @@ bool create_object(std::string_view fqn, std::string_view domain_name, substrate
         return false;
     }
     substrate::header_init(header, entry->schema_hash, entry->version, entry->fqn);
+    auto* bytes = object_bytes(*out);
+    if (bytes != nullptr) {
+        for (const auto& field : entry->fields) {
+            if (field.type != CType::Object) {
+                continue;
+            }
+            const auto* nested = TypeRegistry::global().lookup(field.object_fqn);
+            if (nested == nullptr) {
+                continue;
+            }
+            auto* nested_header = reinterpret_cast<substrate::ObjectHeader*>(bytes + field.offset);
+            substrate::header_init(nested_header, nested->schema_hash, nested->version, nested->fqn);
+        }
+    }
     return true;
 }
 
@@ -475,6 +548,55 @@ bool field_set_bool(const substrate::MemoryHandle& handle, const char* field, bo
     return field_set_scalar(handle, field, CType::Bool, raw);
 }
 
+int field_get_string(const substrate::MemoryHandle& handle, const char* field, char* out, std::size_t capacity) {
+    const auto* entry = entry_for_handle(handle);
+    if (entry == nullptr) {
+        return -1;
+    }
+    const auto* spec = find_field(*entry, field);
+    if (spec == nullptr || spec->type != CType::String) {
+        return -1;
+    }
+    auto* bytes = object_bytes(handle);
+    if (bytes == nullptr) {
+        return -1;
+    }
+    const auto* slot = reinterpret_cast<const StringSlot*>(bytes + spec->offset);
+    const std::size_t length = slot->length > sizeof(slot->data) ? sizeof(slot->data) : slot->length;
+    if (capacity == 0) {
+        return static_cast<int>(length);
+    }
+    const std::size_t to_copy = length < capacity - 1 ? length : capacity - 1;
+    if (to_copy > 0) {
+        std::memcpy(out, slot->data, to_copy);
+    }
+    out[to_copy] = '\0';
+    return static_cast<int>(length);
+}
+
+bool field_set_string(const substrate::MemoryHandle& handle, const char* field, const char* value, std::size_t len) {
+    const auto* entry = entry_for_handle(handle);
+    if (entry == nullptr || value == nullptr) {
+        return false;
+    }
+    const auto* spec = find_field(*entry, field);
+    if (spec == nullptr || spec->type != CType::String) {
+        return false;
+    }
+    auto* bytes = object_bytes(handle);
+    if (bytes == nullptr) {
+        return false;
+    }
+    auto* slot = reinterpret_cast<StringSlot*>(bytes + spec->offset);
+    const std::size_t capped = len > sizeof(slot->data) ? sizeof(slot->data) : len;
+    slot->length = static_cast<uint32_t>(capped);
+    std::memset(slot->data, 0, sizeof(slot->data));
+    if (capped > 0) {
+        std::memcpy(slot->data, value, capped);
+    }
+    return true;
+}
+
 bool field_get_object(const substrate::MemoryHandle& handle, const char* field, substrate::MemoryHandle* out) {
     if (out == nullptr) {
         return false;
@@ -489,6 +611,15 @@ bool field_get_object(const substrate::MemoryHandle& handle, const char* field, 
     }
     const auto* nested = TypeRegistry::global().lookup(spec->object_fqn);
     if (nested == nullptr) {
+        return false;
+    }
+    auto* bytes = object_bytes(handle);
+    if (bytes == nullptr) {
+        return false;
+    }
+    const auto* header = reinterpret_cast<const substrate::ObjectHeader*>(bytes + spec->offset);
+    const auto* stored = TypeRegistry::global().lookup_by_schema_hash(header->schema_hash);
+    if (stored == nullptr || stored->fqn != nested->fqn) {
         return false;
     }
     *out = handle;
@@ -582,7 +713,11 @@ bool call_f64(const substrate::MemoryHandle& handle, const char* method, const c
 }
 
 int call_bytes(const substrate::MemoryHandle& handle, const char* method, uint8_t* out, std::size_t capacity) {
-    return dispatch_bytes(resolve_method_slot(handle, method), handle, out, capacity);
+    auto* slot = resolve_method_slot(handle, method);
+    if (slot == nullptr) {
+        return -1;
+    }
+    return dispatch_bytes(slot, handle, method, out, capacity);
 }
 
 bool call_constructor(const char* fqn, const char* method, const char* arg0, const char* arg1,
@@ -620,6 +755,24 @@ int resolve_handle_fqn(const substrate::MemoryHandle& handle, char* out, std::si
         return -3;
     }
     return written;
+}
+
+bool patch_embedded_schema_hash(const substrate::MemoryHandle& handle, const char* field, uint64_t schema_hash) {
+    const auto* entry = entry_for_handle(handle);
+    if (entry == nullptr) {
+        return false;
+    }
+    const auto* spec = find_field(*entry, field);
+    if (spec == nullptr || spec->type != CType::Object) {
+        return false;
+    }
+    auto* bytes = object_bytes(handle);
+    if (bytes == nullptr) {
+        return false;
+    }
+    auto* header = reinterpret_cast<substrate::ObjectHeader*>(bytes + spec->offset);
+    header->schema_hash = schema_hash;
+    return true;
 }
 
 void bootstrap() {
@@ -705,6 +858,22 @@ int cruspy_field_set_bool(const pymergetic::cruspy::substrate::MemoryHandle* han
     return pymergetic::cruspy::registry::field_set_bool(*handle, field, value != 0) ? 0 : -2;
 }
 
+int cruspy_field_get_string(const pymergetic::cruspy::substrate::MemoryHandle* handle, const char* field, char* out,
+                            std::size_t capacity) {
+    if (handle == nullptr) {
+        return -1;
+    }
+    return pymergetic::cruspy::registry::field_get_string(*handle, field, out, capacity);
+}
+
+int cruspy_field_set_string(const pymergetic::cruspy::substrate::MemoryHandle* handle, const char* field,
+                            const char* value, std::size_t len) {
+    if (handle == nullptr || value == nullptr) {
+        return -1;
+    }
+    return pymergetic::cruspy::registry::field_set_string(*handle, field, value, len) ? 0 : -2;
+}
+
 int cruspy_field_get_object(const pymergetic::cruspy::substrate::MemoryHandle* handle, const char* field,
                             pymergetic::cruspy::substrate::MemoryHandle* out) {
     if (handle == nullptr) {
@@ -752,6 +921,9 @@ int cruspy_call_bytes(const pymergetic::cruspy::substrate::MemoryHandle* handle,
     if (handle == nullptr) {
         return -1;
     }
+    if (capacity == 0) {
+        return pymergetic::cruspy::registry::call_bytes(*handle, method, nullptr, 0);
+    }
     return pymergetic::cruspy::registry::call_bytes(*handle, method, out, capacity);
 }
 
@@ -797,6 +969,34 @@ int cruspy_register_python_method(const char* fqn, const char* method) {
         return -1;
     }
     return pymergetic::cruspy::registry::TypeRegistry::global().enable_python_method(fqn, method) ? 0 : -2;
+}
+
+int cruspy_bind_python_method(const char* fqn, const char* method, void* py_fn) {
+    if (fqn == nullptr || method == nullptr || py_fn == nullptr) {
+        return -1;
+    }
+    return pymergetic::cruspy::registry::TypeRegistry::global().bind_python_method(fqn, method, py_fn) ? 0 : -2;
+}
+
+void cruspy_foreach_python_method(void (*callback)(const char* fqn, const char* method, void* user), void* user) {
+    if (callback == nullptr) {
+        return;
+    }
+    pymergetic::cruspy::registry::TypeRegistry::global().foreach_python_method(
+        [callback, user](std::string_view fqn, std::string_view name,
+                           pymergetic::cruspy::functions::CruspyMethodSlot& slot) {
+            if (slot.py_fn == nullptr) {
+                callback(fqn.data(), name.data(), user);
+            }
+        });
+}
+
+int cruspy_test_patch_field_schema_hash(const pymergetic::cruspy::substrate::MemoryHandle* handle, const char* field,
+                                        uint64_t schema_hash) {
+    if (handle == nullptr || field == nullptr) {
+        return -1;
+    }
+    return pymergetic::cruspy::registry::patch_embedded_schema_hash(*handle, field, schema_hash) ? 0 : -2;
 }
 
 int cruspy_resolve_handle_fqn(const pymergetic::cruspy::substrate::MemoryHandle* handle, char* out,

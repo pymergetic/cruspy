@@ -6,6 +6,9 @@ use pyo3::types::PyModule;
 #[path = "runtime/__init__.rs"]
 pub mod runtime;
 
+#[path = "registry/__init__.rs"]
+pub mod registry;
+
 #[path = "models/__init__.rs"]
 pub mod models;
 
@@ -18,8 +21,8 @@ pub mod testing;
 pub fn init_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     runtime::register(m)?;
-    models::register();
     shm::register(m)?;
+    runtime::finalize_python_methods(m.py(), m)?;
     testing::register(m)?;
     Ok(())
 }

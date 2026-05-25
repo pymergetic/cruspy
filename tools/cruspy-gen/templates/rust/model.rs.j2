@@ -29,6 +29,8 @@ impl Default for {{ sm.name }}Init {
             {{ f.name }}: {{ f.default_py | replace("True", "true") | replace("False", "false") }},
 {% elif f.storage == "i64" %}
             {{ f.name }}: {{ f.default_py }},
+{% elif f.storage == "string" %}
+            {{ f.name }}: String::new(),
 {% endif %}
 {% endfor %}
         }
@@ -96,6 +98,13 @@ impl {{ sm.name }} {
     }
     pub fn set_{{ f.name }}(&mut self, value: i64) -> Result<(), CruspyError> {
         kernel::field_set_i64(&self.handle, "{{ f.name }}", value)
+    }
+{% elif f.storage == "string" %}
+    pub fn {{ f.name }}(&self) -> Result<String, CruspyError> {
+        kernel::field_get_string(&self.handle, "{{ f.name }}")
+    }
+    pub fn set_{{ f.name }}(&mut self, value: impl AsRef<str>) -> Result<(), CruspyError> {
+        kernel::field_set_string(&self.handle, "{{ f.name }}", value.as_ref())
     }
 {% elif f.is_object %}
     pub fn {{ f.name }}(&self) -> Result<{{ f.rust_use_path }}::{{ f.object_rust }}, CruspyError> {

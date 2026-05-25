@@ -100,6 +100,78 @@ bool DomainRegistry::register_heap(const std::string& name) {
     return true;
 }
 
+bool DomainRegistry::register_shm(const std::string& name, ShmDomainOps ops, uint64_t* domain_low_out) {
+    std::lock_guard lock(mutex_);
+    if (name_to_id_.contains(name)) {
+        if (domain_low_out != nullptr) {
+            *domain_low_out = name_to_id_[name].low;
+        }
+        return true;
+    }
+    const auto id = make_id(next_domain_low_++);
+    shm_domains_.emplace(name, ops);
+    shm_id_to_name_.emplace(id.low, name);
+    name_to_id_.emplace(name, id);
+    if (domain_low_out != nullptr) {
+        *domain_low_out = id.low;
+    }
+    return true;
+}
+
+bool DomainRegistry::allocate(const std::string& name, std::size_t size, substrate::MemoryHandle* out) {
+    if (out == nullptr || size == 0) {
+        return false;
+    }
+    std::lock_guard lock(mutex_);
+    const auto name_it = name_to_id_.find(name);
+    if (name_it == name_to_id_.end()) {
+        return false;
+    }
+    const auto shm_it = shm_domains_.find(name);
+    if (shm_it != shm_domains_.end()) {
+        return shm_it->second.allocate(shm_it->second.ctx, size, out) == 0;
+    }
+    const auto dit = domains_.find(name_it->second.low);
+    if (dit == domains_.end()) {
+        return false;
+    }
+    return dit->second->allocate(size, out);
+}
+
+std::byte* DomainRegistry::resolve_bytes(const substrate::MemoryHandle& handle) {
+    std::lock_guard lock(mutex_);
+    const auto shm_name_it = shm_id_to_name_.find(handle.domain_id.low);
+    if (shm_name_it != shm_id_to_name_.end()) {
+        const auto shm_it = shm_domains_.find(shm_name_it->second);
+        if (shm_it != shm_domains_.end() && shm_it->second.resolve != nullptr) {
+            return reinterpret_cast<std::byte*>(shm_it->second.resolve(shm_it->second.ctx, &handle));
+        }
+        return nullptr;
+    }
+    const auto dit = domains_.find(handle.domain_id.low);
+    if (dit == domains_.end()) {
+        return nullptr;
+    }
+    return dit->second->resolve_bytes(handle);
+}
+
+bool DomainRegistry::deallocate(const substrate::MemoryHandle& handle) {
+    std::lock_guard lock(mutex_);
+    const auto shm_name_it = shm_id_to_name_.find(handle.domain_id.low);
+    if (shm_name_it != shm_id_to_name_.end()) {
+        const auto shm_it = shm_domains_.find(shm_name_it->second);
+        if (shm_it != shm_domains_.end() && shm_it->second.deallocate != nullptr) {
+            return shm_it->second.deallocate(shm_it->second.ctx, &handle) == 0;
+        }
+        return false;
+    }
+    const auto dit = domains_.find(handle.domain_id.low);
+    if (dit == domains_.end()) {
+        return false;
+    }
+    return dit->second->deallocate(handle);
+}
+
 HeapDomain* DomainRegistry::find(const std::string& name) {
     std::lock_guard lock(mutex_);
     const auto it = name_to_id_.find(name);
@@ -119,9 +191,18 @@ HeapDomain* DomainRegistry::find(substrate::DomainId id) {
 std::vector<DomainStats> DomainRegistry::stats_all() const {
     std::lock_guard lock(mutex_);
     std::vector<DomainStats> out;
-    out.reserve(domains_.size());
+    out.reserve(domains_.size() + shm_domains_.size());
     for (const auto& [_, domain] : domains_) {
         out.push_back(domain->stats());
+    }
+    for (const auto& [name, _] : shm_domains_) {
+        DomainStats s{};
+        const auto id_it = name_to_id_.find(name);
+        if (id_it != name_to_id_.end()) {
+            s.domain_id = id_it->second;
+        }
+        s.name = name;
+        out.push_back(s);
     }
     return out;
 }
@@ -147,27 +228,30 @@ int cruspy_allocator_register_heap(const char* name) {
     return pymergetic::cruspy::allocator::DomainRegistry::global().register_heap(name) ? 0 : -1;
 }
 
+int cruspy_allocator_register_shm(const char* name, pymergetic::cruspy::allocator::ShmDomainOps ops,
+                                  uint64_t* domain_low_out) {
+    if (name == nullptr || ops.allocate == nullptr || ops.resolve == nullptr) {
+        return -1;
+    }
+    return pymergetic::cruspy::allocator::DomainRegistry::global().register_shm(name, ops, domain_low_out) ? 0 : -1;
+}
+
 int cruspy_allocator_allocate(const char* domain_name, uint64_t size,
                               pymergetic::cruspy::substrate::MemoryHandle* out) {
     if (domain_name == nullptr || out == nullptr || size == 0) {
         return -1;
     }
-    auto* domain = pymergetic::cruspy::allocator::DomainRegistry::global().find(domain_name);
-    if (domain == nullptr) {
-        return -2;
-    }
-    return domain->allocate(static_cast<std::size_t>(size), out) ? 0 : -3;
+    return pymergetic::cruspy::allocator::DomainRegistry::global().allocate(domain_name, static_cast<std::size_t>(size),
+                                                                             out)
+               ? 0
+               : -3;
 }
 
 int cruspy_allocator_deallocate(const pymergetic::cruspy::substrate::MemoryHandle* handle) {
     if (handle == nullptr || !cruspy_substrate_handle_valid(handle)) {
         return -1;
     }
-    auto* domain = pymergetic::cruspy::allocator::DomainRegistry::global().find(handle->domain_id);
-    if (domain == nullptr) {
-        return -2;
-    }
-    return domain->deallocate(*handle) ? 0 : -3;
+    return pymergetic::cruspy::allocator::DomainRegistry::global().deallocate(*handle) ? 0 : -3;
 }
 
 int cruspy_allocator_stats_json(char* buffer, std::size_t capacity) {

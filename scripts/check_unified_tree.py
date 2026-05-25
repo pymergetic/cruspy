@@ -54,6 +54,19 @@ def is_openapi_model_tree(module_dir: Path) -> bool:
     return False
 
 
+def is_polyglot_infrastructure(module_dir: Path) -> bool:
+    """Shared C++/Rust modules (registry, native test harnesses)."""
+    if module_dir.name == "registry":
+        return True
+    try:
+        rel = module_dir.relative_to(SRC)
+    except ValueError:
+        return False
+    if not rel.parts or rel.parts[0] != "testing":
+        return False
+    return (module_dir / "__init__.cpp").is_file() or (module_dir / "__init__.rs").is_file()
+
+
 def language_owners(module_dir: Path) -> list[str]:
     owners: list[str] = []
     if (module_dir / "__init__.hpp").exists() or (module_dir / "__init__.cpp").exists():
@@ -82,6 +95,8 @@ def check_single_language_supremacy() -> list[str]:
             continue
         if is_openapi_model_tree(module_dir):
             # EP-0021 polyglot models: __init__.* + {stem}_gen.*
+            continue
+        if is_polyglot_infrastructure(module_dir):
             continue
         owners = language_owners(module_dir)
         if len(owners) > 1:

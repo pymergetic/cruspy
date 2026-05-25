@@ -3,6 +3,9 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+#[path = "hello/__init__.rs"]
+mod hello;
+
 use crate::cruspy_root::models::document::{Document, DocumentInit};
 
 extern "C" {
@@ -86,5 +89,6 @@ fn run_crosslang_dispatch_tests(py: Python<'_>) -> PyResult<Py<PyAny>> {
 
 pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     parent.add_function(wrap_pyfunction!(run_crosslang_dispatch_tests, parent)?)?;
+    parent.add_function(wrap_pyfunction!(hello::run_hello_crosslang_tests, parent)?)?;
     Ok(())
 }

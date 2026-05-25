@@ -47,6 +47,14 @@ extern "C" {
     fn cruspy_field_set_f64(handle: *const MemoryHandle, field: *const c_char, value: f64) -> i32;
     fn cruspy_field_get_bool(handle: *const MemoryHandle, field: *const c_char, out: *mut i32) -> i32;
     fn cruspy_field_set_bool(handle: *const MemoryHandle, field: *const c_char, value: i32) -> i32;
+    fn cruspy_field_get_string(handle: *const MemoryHandle, field: *const c_char, out: *mut c_char, capacity: usize)
+        -> i32;
+    fn cruspy_field_set_string(
+        handle: *const MemoryHandle,
+        field: *const c_char,
+        value: *const c_char,
+        len: usize,
+    ) -> i32;
     fn cruspy_field_get_object(handle: *const MemoryHandle, field: *const c_char, out: *mut MemoryHandle) -> i32;
     fn cruspy_registry_describe(fqn: *const c_char, buffer: *mut c_char, capacity: usize) -> i32;
     fn cruspy_call_bool(handle: *const MemoryHandle, method: *const c_char, out: *mut i32) -> i32;
@@ -159,6 +167,36 @@ pub fn field_get_bool(handle: &MemoryHandle, field: &str) -> Result<bool, Cruspy
 pub fn field_set_bool(handle: &MemoryHandle, field: &str, value: bool) -> Result<(), CruspyError> {
     let cfield = field_name(field)?;
     let rc = unsafe { cruspy_field_set_bool(handle, cfield.as_ptr(), if value { 1 } else { 0 }) };
+    if rc != 0 {
+        return Err(CruspyError(rc));
+    }
+    Ok(())
+}
+
+pub fn field_get_string(handle: &MemoryHandle, field: &str) -> Result<String, CruspyError> {
+    let cfield = field_name(field)?;
+    let mut buf = vec![0u8; 256];
+    let rc = unsafe {
+        cruspy_field_get_string(
+            handle,
+            cfield.as_ptr(),
+            buf.as_mut_ptr() as *mut c_char,
+            buf.len(),
+        )
+    };
+    if rc < 0 {
+        return Err(CruspyError(rc));
+    }
+    buf.truncate(rc as usize);
+    Ok(String::from_utf8_lossy(&buf).into_owned())
+}
+
+pub fn field_set_string(handle: &MemoryHandle, field: &str, value: &str) -> Result<(), CruspyError> {
+    let cfield = field_name(field)?;
+    let cvalue = CString::new(value).map_err(|_| CruspyError(-1))?;
+    let rc = unsafe {
+        cruspy_field_set_string(handle, cfield.as_ptr(), cvalue.as_ptr(), cvalue.as_bytes().len())
+    };
     if rc != 0 {
         return Err(CruspyError(rc));
     }

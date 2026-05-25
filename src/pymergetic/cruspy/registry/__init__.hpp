@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -19,6 +20,7 @@ enum class CType : uint8_t {
     I64,
     F64,
     Bool,
+    String,
     Object,
 };
 
@@ -70,6 +72,9 @@ public:
     const TypeEntry* lookup(std::string_view fqn) const;
     const TypeEntry* lookup_by_schema_hash(uint64_t schema_hash) const;
     functions::CruspyMethodSlot* method_slot(std::string_view fqn, std::string_view name);
+    bool bind_python_method(std::string_view fqn, std::string_view name, void* py_fn);
+    void foreach_python_method(
+        const std::function<void(std::string_view fqn, std::string_view name, functions::CruspyMethodSlot& slot)>& fn);
     std::vector<std::string> list_fqns() const;
 
 private:
@@ -92,6 +97,8 @@ bool field_get_f64(const substrate::MemoryHandle& handle, const char* field, dou
 bool field_set_f64(const substrate::MemoryHandle& handle, const char* field, double value);
 bool field_get_bool(const substrate::MemoryHandle& handle, const char* field, bool* out);
 bool field_set_bool(const substrate::MemoryHandle& handle, const char* field, bool value);
+int field_get_string(const substrate::MemoryHandle& handle, const char* field, char* out, std::size_t capacity);
+bool field_set_string(const substrate::MemoryHandle& handle, const char* field, const char* value, std::size_t len);
 bool field_get_object(const substrate::MemoryHandle& handle, const char* field, substrate::MemoryHandle* out);
 int describe_json(std::string_view fqn, char* buffer, std::size_t capacity);
 
@@ -104,7 +111,7 @@ bool call_constructor(const char* fqn, const char* method, const char* arg0, con
                       substrate::MemoryHandle* out);
 int call_static_str(const char* fqn, const char* method, char* out, std::size_t capacity);
 int resolve_handle_fqn(const substrate::MemoryHandle& handle, char* out, std::size_t capacity);
-
+bool patch_embedded_schema_hash(const substrate::MemoryHandle& handle, const char* field, uint64_t schema_hash);
 void bootstrap();
 
 }  // namespace pymergetic::cruspy::registry
@@ -123,6 +130,10 @@ int cruspy_field_get_f64(const pymergetic::cruspy::substrate::MemoryHandle* hand
 int cruspy_field_set_f64(const pymergetic::cruspy::substrate::MemoryHandle* handle, const char* field, double value);
 int cruspy_field_get_bool(const pymergetic::cruspy::substrate::MemoryHandle* handle, const char* field, int* out);
 int cruspy_field_set_bool(const pymergetic::cruspy::substrate::MemoryHandle* handle, const char* field, int value);
+int cruspy_field_get_string(const pymergetic::cruspy::substrate::MemoryHandle* handle, const char* field, char* out,
+                            std::size_t capacity);
+int cruspy_field_set_string(const pymergetic::cruspy::substrate::MemoryHandle* handle, const char* field,
+                            const char* value, std::size_t len);
 int cruspy_field_get_object(const pymergetic::cruspy::substrate::MemoryHandle* handle, const char* field,
                             pymergetic::cruspy::substrate::MemoryHandle* out);
 int cruspy_registry_describe(const char* fqn, char* buffer, std::size_t capacity);
@@ -138,8 +149,13 @@ int cruspy_call_static_str(const char* fqn, const char* method, char* out, std::
 int cruspy_register_rust_method(const char* fqn, const char* method, void* rust_fn, int preferred);
 int cruspy_register_cpp_method(const char* fqn, const char* method, void* cpp_fn, int preferred);
 int cruspy_register_python_method(const char* fqn, const char* method);
+int cruspy_bind_python_method(const char* fqn, const char* method, void* py_fn);
+void cruspy_foreach_python_method(void (*callback)(const char* fqn, const char* method, void* user), void* user);
+int cruspy_resolve_python_methods(void* py_module);
 int cruspy_dispatch_python_f64(const pymergetic::cruspy::substrate::MemoryHandle* handle, const char* method,
                                const char* arg0, const char* arg1, double* out);
+int cruspy_dispatch_python_bytes(const pymergetic::cruspy::substrate::MemoryHandle* handle, const char* method,
+                                 std::uint8_t* out, std::size_t capacity);
 int cruspy_resolve_handle_fqn(const pymergetic::cruspy::substrate::MemoryHandle* handle, char* out,
                               std::size_t capacity);
 

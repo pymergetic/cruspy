@@ -1,0 +1,50 @@
+openapi: "3.1.0"
+info:
+  title: Hello Model
+  version: "1.0.0"
+
+x-cruspy-namespace: pymergetic.cruspy.models.hello
+
+components:
+  schemas:
+
+    Hello:
+      type: object
+      description: "Cross-language hello world demo model."
+
+      properties:
+        message:
+          type: string
+          default: ""
+          description: "Greeting payload echoed by each hello_* method."
+
+      x-cruspy-methods:
+        - name: hello_cpp
+          kind: instance
+          mutating: false
+          impl: cpp
+          description: "Returns a C++ greeting using the message field."
+          returns:
+            type: string
+            format: byte
+          args: []
+
+        - name: hello_rust
+          kind: instance
+          mutating: false
+          impl: rust
+          description: "Returns a Rust greeting using the message field."
+          returns:
+            type: string
+            format: byte
+          args: []
+
+        - name: hello_python
+          kind: instance
+          mutating: false
+          impl: python
+          description: "Returns a Python greeting using the message field."
+          returns:
+            type: string
+            format: byte
+          args: []

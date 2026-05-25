@@ -11,11 +11,15 @@
 
 namespace pymergetic::cruspy::field {
 
+/// Tag type for reflected string fields (storage lives in the registry string slot).
+struct StringTag {};
+
 enum class StorageKind : uint8_t {
     I32,
     I64,
     F64,
     Bool,
+    String,
     Object,
 };
 

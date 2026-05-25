@@ -1,3 +1,5 @@
+mod macros;
+
 #[path = "pymergetic/cruspy/__init__.rs"]
 mod cruspy_root;
 

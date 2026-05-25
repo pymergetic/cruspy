@@ -37,7 +37,7 @@ functions::CruspyMethodSlot {{ sm.name }}Layout::method_{{ m.name }}{};
 
 {{ sm.name }}::{{ sm.name }}(
     std::string_view domain{% for f in sm.fields %},
-    {{ f.wrapper_cpp_type if f.is_object else f.cpp_type }} {{ f.name }}{% endfor %}
+    {{ f.wrapper_cpp_type if f.wrapper_cpp_type else f.cpp_type }} {{ f.name }}{% endfor %}
 ) {
     registry::create_object(kFqn, domain, &handle_);
 {% for f in sm.fields %}
@@ -96,6 +96,15 @@ void {{ sm.name }}::set_{{ f.name }}({{ f.cpp_type }} value) {
 }
 void {{ sm.name }}::set_{{ f.name }}({{ f.cpp_type }} value) {
     registry::field_set_i64(handle_, "{{ f.name }}", value);
+}
+{% elif f.storage == "string" %}
+std::string {{ sm.name }}::{{ f.name }}() const {
+    char buf[256];
+    const int n = registry::field_get_string(handle_, "{{ f.name }}", buf, sizeof(buf));
+    return n >= 0 ? std::string(buf, static_cast<std::size_t>(n)) : std::string{};
+}
+void {{ sm.name }}::set_{{ f.name }}(const std::string& value) {
+    registry::field_set_string(handle_, "{{ f.name }}", value.data(), value.size());
 }
 {% elif f.is_object %}
 {{ f.wrapper_cpp_type }} {{ sm.name }}::{{ f.name }}() const {

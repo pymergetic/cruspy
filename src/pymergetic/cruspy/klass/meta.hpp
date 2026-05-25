@@ -32,7 +32,9 @@ template <typename T>
 inline constexpr bool is_object_storage_v =
     !std::is_same_v<std::remove_cvref_t<T>, int32_t> && !std::is_same_v<std::remove_cvref_t<T>, int64_t> &&
     !std::is_same_v<std::remove_cvref_t<T>, double> && !std::is_same_v<std::remove_cvref_t<T>, float> &&
-    !std::is_same_v<std::remove_cvref_t<T>, bool>;
+    !std::is_same_v<std::remove_cvref_t<T>, bool> &&
+    !std::is_same_v<std::remove_cvref_t<T>, std::string> &&
+    !std::is_same_v<std::remove_cvref_t<T>, field::StringTag>;
 
 template <typename T>
 struct storage_kind_of {
@@ -58,6 +60,16 @@ struct storage_kind_of<float> {
 template <>
 struct storage_kind_of<bool> {
     static constexpr field::StorageKind value = field::StorageKind::Bool;
+};
+
+template <>
+struct storage_kind_of<std::string> {
+    static constexpr field::StorageKind value = field::StorageKind::String;
+};
+
+template <>
+struct storage_kind_of<field::StringTag> {
+    static constexpr field::StorageKind value = field::StorageKind::String;
 };
 
 template <typename T>

@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -19,6 +18,13 @@ struct DomainStats {
     uint64_t bytes_used{};
     uint64_t bytes_capacity{};
     uint64_t allocation_count{};
+};
+
+struct ShmDomainOps {
+    void* ctx{};
+    int (*allocate)(void* ctx, uint64_t size, substrate::MemoryHandle* out){};
+    int (*deallocate)(void* ctx, const substrate::MemoryHandle* handle){};
+    std::byte* (*resolve)(void* ctx, const substrate::MemoryHandle* handle){};
 };
 
 class HeapDomain {
@@ -52,6 +58,10 @@ public:
     static DomainRegistry& global();
 
     bool register_heap(const std::string& name);
+    bool register_shm(const std::string& name, ShmDomainOps ops, uint64_t* domain_low_out = nullptr);
+    bool allocate(const std::string& name, std::size_t size, substrate::MemoryHandle* out);
+    bool deallocate(const substrate::MemoryHandle& handle);
+    std::byte* resolve_bytes(const substrate::MemoryHandle& handle);
     HeapDomain* find(const std::string& name);
     HeapDomain* find(substrate::DomainId id);
     std::vector<DomainStats> stats_all() const;
@@ -62,6 +72,8 @@ private:
     mutable std::mutex mutex_;
     std::unordered_map<std::string, substrate::DomainId> name_to_id_;
     std::unordered_map<uint64_t, std::unique_ptr<HeapDomain>> domains_;
+    std::unordered_map<std::string, ShmDomainOps> shm_domains_;
+    std::unordered_map<uint64_t, std::string> shm_id_to_name_;
     uint64_t next_domain_low_{1};
 };
 
@@ -72,6 +84,8 @@ extern "C" {
 #endif
 
 int cruspy_allocator_register_heap(const char* name);
+int cruspy_allocator_register_shm(const char* name, pymergetic::cruspy::allocator::ShmDomainOps ops,
+                                    uint64_t* domain_low_out);
 int cruspy_allocator_allocate(const char* domain_name, uint64_t size,
                               pymergetic::cruspy::substrate::MemoryHandle* out);
 int cruspy_allocator_deallocate(const pymergetic::cruspy::substrate::MemoryHandle* handle);

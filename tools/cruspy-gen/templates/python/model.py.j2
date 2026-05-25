@@ -51,6 +51,15 @@ class {{ sm.name }}:
     def {{ f.name }}(self, value: {{ f.py_type }}) -> None:
         self._handle.set_field_{{ f.storage }}("{{ f.name }}", value)
 
+{% elif f.storage == "string" %}
+    @property
+    def {{ f.name }}(self) -> str:
+        return self._handle.field_string("{{ f.name }}")
+
+    @{{ f.name }}.setter
+    def {{ f.name }}(self, value: str) -> None:
+        self._handle.set_field_string("{{ f.name }}", value)
+
 {% elif f.is_object %}
     @property
     def {{ f.name }}(self) -> {{ f.object_py }}:

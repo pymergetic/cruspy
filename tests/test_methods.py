@@ -31,6 +31,15 @@ def test_score_text_python() -> None:
     assert doc.score_text("hello world", model_id="other") <= score
 
 
+def test_score_text_callable_after_import() -> None:
+    import pymergetic.cruspy  # noqa: F401
+
+    from pymergetic.cruspy.models.document import Document as ImportedDocument
+
+    doc = ImportedDocument(id=2, score=0.0)
+    assert doc.score_text("hello") > 0.0
+
+
 def test_serialize_rust() -> None:
     doc = Document(id=7, score=0.875, active=True, meta=Metadata(id=3, created_at=99))
     payload = doc.serialize()
@@ -44,6 +53,11 @@ def test_serialize_rust() -> None:
     assert active is True
     assert meta_id == 3
     assert meta_created_at == 99
+
+
+def test_call_bytes_capacity_probe() -> None:
+    doc = Document(id=1, score=0.25)
+    assert doc.handle.call_bytes_size("serialize") == 29
 
 
 def test_from_json_rust() -> None:

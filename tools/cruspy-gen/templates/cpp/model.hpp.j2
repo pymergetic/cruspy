@@ -34,7 +34,7 @@ public:
 
     {{ sm.name }}(
         std::string_view domain{% for f in sm.fields %},
-        {{ f.wrapper_cpp_type if f.is_object else f.cpp_type }} {{ f.name }} = {{ f.default_cpp }}{% endfor %}
+        {{ f.wrapper_cpp_type if f.wrapper_cpp_type else f.cpp_type }} {{ f.name }} = {{ f.default_cpp }}{% endfor %}
     );
 
     explicit {{ sm.name }}(substrate::MemoryHandle handle);
@@ -46,6 +46,9 @@ public:
 {% if f.storage in ["i32", "f64", "bool", "i64"] %}
     {{ f.cpp_type }} {{ f.name }}() const;
     void set_{{ f.name }}({{ f.cpp_type }} value);
+{% elif f.storage == "string" %}
+    std::string {{ f.name }}() const;
+    void set_{{ f.name }}(const std::string& value);
 {% elif f.is_object %}
     {{ f.wrapper_cpp_type }} {{ f.name }}() const;
 {% endif %}
