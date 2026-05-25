@@ -1,7 +1,7 @@
 //! Crate-root macros (must live here for rust-analyzer resolution).
 
 #[macro_export]
-macro_rules! CRUSPY_REGISTER_RUST_METHOD {
+macro_rules! CRUSPY_REGISTER_METHOD {
     ($fqn:expr, $method:expr, $rust_fn:ident) => {
         ::paste::paste! {
             #[::ctor::ctor]

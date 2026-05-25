@@ -44,7 +44,7 @@ def test_cross_language_roundtrip_from_python() -> None:
     assert schema["fqn"] == "pymergetic.cruspy.models.document.Document"
     assert {f["name"] for f in schema["fields"]} == {"id", "score", "active", "meta"}
 
-    # Python method_impl body
+    # CRUSPY_REGISTER_METHOD body
     score = doc.score_text("hello cruspy", model_id="default")
     assert 0.0 < score <= 1.0
 

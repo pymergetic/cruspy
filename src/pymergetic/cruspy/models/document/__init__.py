@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pymergetic.cruspy.runtime import method_impl
+from pymergetic.cruspy.runtime import CRUSPY_REGISTER_METHOD
 
 from .__init___gen import Document
 
@@ -16,4 +16,4 @@ def _score_text(self, text: str, model_id: str = "default") -> float:
     return min(1.0, base * 0.9)
 
 
-method_impl(Document, "score_text", _score_text)
+CRUSPY_REGISTER_METHOD(Document, "score_text", _score_text)

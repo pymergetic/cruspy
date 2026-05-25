@@ -2,7 +2,7 @@
 
 include!("hello_gen.rs");
 
-use crate::CRUSPY_REGISTER_RUST_METHOD;
+use crate::CRUSPY_REGISTER_METHOD;
 use crate::cruspy_root::runtime::kernel::{field_get_string, MemoryHandle as KernelMemoryHandle};
 
 #[no_mangle]
@@ -29,4 +29,4 @@ pub unsafe extern "C" fn hello_rust(
     greeting.len() as i32
 }
 
-CRUSPY_REGISTER_RUST_METHOD!(FQN, "hello_rust", hello_rust);
+CRUSPY_REGISTER_METHOD!(FQN, "hello_rust", hello_rust);

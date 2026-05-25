@@ -664,8 +664,8 @@ fn describe(fqn: &str) -> PyResult<String> {
     Ok(json.to_string_lossy().into_owned())
 }
 
-#[pyfunction]
-fn method_impl(_py: Python<'_>, model_class: Bound<'_, PyAny>, method_name: &str, func: Bound<'_, PyAny>) -> PyResult<()> {
+#[pyfunction(name = "CRUSPY_REGISTER_METHOD")]
+fn cruspy_register_method(_py: Python<'_>, model_class: Bound<'_, PyAny>, method_name: &str, func: Bound<'_, PyAny>) -> PyResult<()> {
     let fqn: String = model_class.getattr("_FQN")?.extract()?;
     let cfqn = CString::new(fqn.clone()).map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>("invalid fqn"))?;
     let cmethod =
@@ -701,7 +701,7 @@ pub fn register(parent: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(domain_stats_json, &m)?)?;
     m.add_function(wrap_pyfunction!(create, &m)?)?;
     m.add_function(wrap_pyfunction!(describe, &m)?)?;
-    m.add_function(wrap_pyfunction!(method_impl, &m)?)?;
+    m.add_function(wrap_pyfunction!(cruspy_register_method, &m)?)?;
     m.add_function(wrap_pyfunction!(clone_handle, &m)?)?;
     m.add_function(wrap_pyfunction!(patch_field_schema_hash, &m)?)?;
     parent.add_submodule(&m)?;

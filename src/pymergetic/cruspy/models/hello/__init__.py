@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pymergetic.cruspy.runtime import method_impl
+from pymergetic.cruspy.runtime import CRUSPY_REGISTER_METHOD
 
 from .hello_gen import Hello
 
@@ -13,4 +13,4 @@ def hello_python(self) -> bytes:
     return f"Hello from Python — {self.field_string('message')}".encode("utf-8")
 
 
-method_impl(Hello, "hello_python", hello_python)
+CRUSPY_REGISTER_METHOD(Hello, "hello_python", hello_python)

@@ -48,7 +48,7 @@ CRUSPY_REGISTER_METHOD(HelloLayout, hello_cpp, hello_cpp)
 pub unsafe extern "C" fn hello_rust(handle: *const MemoryHandle, out: *mut u8, cap: usize) -> i32 {
     // read message field, write "Hello from Rust — …" bytes
 }
-CRUSPY_REGISTER_RUST_METHOD!(FQN, "hello_rust", hello_rust);
+CRUSPY_REGISTER_METHOD!(FQN, "hello_rust", hello_rust);
 ```
 
 **Python** defines `hello_python`:
@@ -58,8 +58,11 @@ CRUSPY_REGISTER_RUST_METHOD!(FQN, "hello_rust", hello_rust);
 def hello_python(self) -> bytes:
     return f"Hello from Python — {self.field_string('message')}".encode()
 
-method_impl(Hello, "hello_python", hello_python)
+CRUSPY_REGISTER_METHOD(Hello, "hello_python", hello_python)
 ```
+
+Same macro name in every language — ``CRUSPY_REGISTER_METHOD``. The file you're
+in already tells you which lang you are registering.
 
 ### Call — usage from every language
 

@@ -5,7 +5,7 @@ pub mod metadata;
 
 include!("__init___gen.rs");
 
-use crate::CRUSPY_REGISTER_RUST_METHOD;
+use crate::CRUSPY_REGISTER_METHOD;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
@@ -214,5 +214,5 @@ pub unsafe extern "C" fn document_from_json(
     0
 }
 
-CRUSPY_REGISTER_RUST_METHOD!(FQN, "serialize", document_serialize);
-CRUSPY_REGISTER_RUST_METHOD!(FQN, "from_json", document_from_json);
+CRUSPY_REGISTER_METHOD!(FQN, "serialize", document_serialize);
+CRUSPY_REGISTER_METHOD!(FQN, "from_json", document_from_json);
