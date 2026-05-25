@@ -139,6 +139,32 @@ C++ / Rust caller rows: ``testing/hello/`` native harness. Python row: generated
 | Hand-written method bodies | ``__init__.{hpp,cpp,rs,py}`` |
 | Registry, allocator, dispatch | C++ kernel + PyO3 ``runtime`` |
 
+### Shared memory (tri-language, one region)
+
+C++ defines the **object layout** and owns the **allocator**. Rust and Python never
+allocate a parallel copy of model fields — they hold a ``MemoryHandle`` (domain +
+offset) into the same bytes.
+
+In the hybrid extension (maturin build), all three languages link one kernel:
+
+```
+  Python Hello._handle  ──┐
+  Rust   Hello.handle   ──┼──► MemoryHandle ──► C++ domain bytes (ObjectHeader + fields)
+  C++    Hello.handle_  ──┘
+```
+
+- **Same object** — ``hello_cpp`` / ``hello_rust`` / ``hello_python`` all receive
+  that handle; ``message`` is read from one slot in the blob.
+- **In-place fields** — numeric/bool field get/set goes through the registry into
+  the allocation (see ``test_shm_domain_zero_copy_reattach`` for handle clone +
+  ``shm_default``).
+- **Not magic** — method return buffers (``call_bytes``, ``bytes``, ``Vec<u8>``) and
+  string field APIs copy out; cross-process sharing needs an explicit SHM domain, not
+  the default ``heap_default`` heap.
+
+So: **one memory region, three language surfaces** — transient handles and dispatch,
+not three separate model heaps.
+
 **cruspy does not link easybind at runtime.** Codegen is driven by OpenAPI YAML
 and runs automatically from ``build.rs`` (via ``cruspy-build``) and CMake
 (``cmake/CruspyGen.cmake``).
