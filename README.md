@@ -15,23 +15,60 @@ from a single source of truth.
 
 ## The Point
 
-**Hello** is the minimal cross-language proof model: one OpenAPI schema, one shared-memory
-object, three methods — each implemented and registered in its native language.
+**Hello** is the proof: **three methods, each defined in a different language**, all
+on the **same shared-memory object**. OpenAPI declares them; you hand-write **one
+function in its native lang**; the registry lets **any caller** invoke **any method**.
 
-| Method | Implemented in | Registration |
-|--------|----------------|--------------|
-| `hello_cpp` | C++ | `CRUSPY_REGISTER_METHOD(...)` |
-| `hello_rust` | Rust | `CRUSPY_REGISTER_RUST_METHOD!(...)` |
-| `hello_python` | Python | `method_impl(Hello, ...)` |
+| Method | **Defined in** | Hand-written file |
+|--------|----------------|-------------------|
+| `hello_cpp` | **C++** | `models/hello/__init__.cpp` |
+| `hello_rust` | **Rust** | `models/hello/__init__.rs` |
+| `hello_python` | **Python** | `models/hello/__init__.py` |
 
-Model lives at ``models/hello/hello.openapi.yaml``; hand-written bodies in
-``models/hello/__init__.{cpp,rs,py}``.
+Same object, same `message` field — three native implementations, zero rewrites in
+the other languages.
 
-### Try it
+### Define — one func per language
+
+**C++** defines `hello_cpp`:
+
+```cpp
+// models/hello/__init__.cpp
+int hello_cpp(const MemoryHandle* handle, uint8_t* out, size_t capacity) {
+    // read message field, write "Hello from C++ — …" bytes
+}
+CRUSPY_REGISTER_METHOD(HelloLayout, hello_cpp, hello_cpp)
+```
+
+**Rust** defines `hello_rust`:
+
+```rust
+// models/hello/__init__.rs
+#[no_mangle]
+pub unsafe extern "C" fn hello_rust(handle: *const MemoryHandle, out: *mut u8, cap: usize) -> i32 {
+    // read message field, write "Hello from Rust — …" bytes
+}
+CRUSPY_REGISTER_RUST_METHOD!(FQN, "hello_rust", hello_rust);
+```
+
+**Python** defines `hello_python`:
+
+```python
+# models/hello/__init__.py
+def hello_python(self) -> bytes:
+    return f"Hello from Python — {self.field_string('message')}".encode()
+
+method_impl(Hello, "hello_python", hello_python)
+```
+
+### Call — usage from every language
+
+Generated wrappers are symmetric. From **any** language you call all three methods;
+dispatch crosses the vtable to the native impl.
+
+**Python**
 
 ```bash
-cd packages/cruspy
-uv run --with maturin maturin develop
 uv run python scripts/demo_crosslang.py
 ```
 
@@ -39,18 +76,40 @@ uv run python scripts/demo_crosslang.py
 from pymergetic.cruspy.models.hello import Hello
 
 h = Hello(message="cruspy")
-print(h.hello_cpp().decode())     # Hello from C++ — cruspy
-print(h.hello_rust().decode())    # Hello from Rust — cruspy
-print(h.hello_python().decode())  # Hello from Python — cruspy
+print(h.hello_cpp().decode())     # → runs C++ impl
+print(h.hello_rust().decode())    # → runs Rust impl
+print(h.hello_python().decode())  # → runs Python impl
 ```
 
-All three read the same ``message`` field from the same object; the registry
-dispatches each call to the correct native implementation.
+**C++**
+
+```cpp
+#include "models/hello/__init__.hpp"
+
+using pymergetic::cruspy::models::hello::Hello;
+
+Hello h("heap_default", "cruspy");
+auto from_cpp    = h.hello_cpp();     // → runs C++ impl
+auto from_rust   = h.hello_rust();    // → runs Rust impl
+auto from_python = h.hello_python();  // → runs Python impl
+```
+
+**Rust**
+
+```rust
+use crate::cruspy_root::models::hello::{Hello, HelloInit};
+
+let h = Hello::new("heap_default", HelloInit { message: "cruspy".into() })?;
+let from_cpp    = h.hello_cpp()?;     // → runs C++ impl
+let from_rust   = h.hello_rust()?;    // → runs Rust impl
+let from_python = h.hello_python()?;  // → runs Python impl
+```
 
 ### Proof: 3×3 dispatch matrix
 
-``tests/hello/test_dispatch_matrix.py`` exercises every **caller × impl** combination.
-Test names read as ``{caller}_calls_{impl}``:
+Defining in three languages is only half the story — **callers** also work from all
+three. ``tests/hello/test_dispatch_matrix.py`` runs every **caller × impl** cell;
+test names are ``{caller}_calls_{impl}``:
 
 ```
 caller \ impl   cpp              rust             python
@@ -59,15 +118,12 @@ cpp             cpp_calls_cpp    cpp_calls_rust   cpp_calls_python
 rust            rust_calls_cpp   rust_calls_rust  rust_calls_python
 ```
 
-Run the matrix:
-
 ```bash
-uv run pytest tests/hello/ -vv
+uv run pytest tests/hello/ -vv    # 9 matrix cells + 1 field check = 10 passed
 ```
 
-Expected: **9 matrix cells + 1 field round-trip = 10 passed**. C++ and Rust caller
-rows run through the native harness in ``testing/hello/``; the Python row calls
-the generated ``Hello`` API directly. Same registry vtable either way.
+C++ / Rust caller rows: ``testing/hello/`` native harness. Python row: generated
+``Hello`` API. Same registry vtable everywhere.
 
 ## Architecture
 
