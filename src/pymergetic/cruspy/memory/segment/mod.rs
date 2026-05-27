@@ -22,7 +22,7 @@ use std::mem;
 
 use talc::{source::Manual, TalcCell};
 
-use crate::pymergetic::cruspy::io::{HasSlab, Kind, OpenMode, SlabError};
+use crate::pymergetic::cruspy::io::{HasSlab, Kind, OpenMode, SlabError, State};
 use crate::pymergetic::cruspy::utils::url::Url;
 
 pub const DEFAULT_CAPACITY: usize = 64 * 1024;
@@ -213,52 +213,35 @@ impl Segment {
         &self.talc
     }
 
-    /// Close slab at `index` and remove it from this segment.
+    /// Logically close slab at `index` (catalog unregister only).
+    ///
+    /// Backing memory stays mapped: talc still holds arena pointers until the
+    /// whole [`Segment`] is dropped.
     pub fn close(&mut self, index: usize) -> Result<(), SegmentTeardownError> {
         let backend = self
             .backends
             .get_mut(index)
             .ok_or(SegmentTeardownError::BadIndex)?;
-        backend
-            .close()
-            .map_err(SegmentTeardownError::Backend)?;
-        self.backends.remove(index);
+        backend.info_mut().state = State::Closed;
         Ok(())
     }
 
-    /// Close every slab and clear the backend list (talc claims unchanged for now).
+    /// Logically close every registered slab; mappings remain until [`Drop`].
     pub fn close_all(&mut self) -> Result<(), SlabError> {
         for backend in &mut self.backends {
-            backend.close()?;
+            backend.info_mut().state = State::Closed;
         }
-        self.backends.clear();
         Ok(())
     }
 
-    /// Close + unlink slab at `index`, then remove it.
+    /// Logically close + mark for unlink when the segment is destroyed.
     pub fn unlink(&mut self, index: usize) -> Result<(), SegmentTeardownError> {
-        let backend = self
-            .backends
-            .get_mut(index)
-            .ok_or(SegmentTeardownError::BadIndex)?;
-        backend
-            .close()
-            .map_err(SegmentTeardownError::Backend)?;
-        backend
-            .unlink()
-            .map_err(SegmentTeardownError::Backend)?;
-        self.backends.remove(index);
-        Ok(())
+        self.close(index)
     }
 
-    /// Close + unlink every slab, then clear the backend list.
+    /// Logically close all slabs; physical unlink runs in [`Drop`].
     pub fn unlink_all(&mut self) -> Result<(), SlabError> {
-        for backend in &mut self.backends {
-            backend.close()?;
-            backend.unlink()?;
-        }
-        self.backends.clear();
-        Ok(())
+        self.close_all()
     }
 
     pub fn locate_slab(&self, locator: &Url) -> Option<usize> {
@@ -269,6 +252,15 @@ impl Segment {
 
     pub fn slab_count(&self) -> usize {
         self.backends.len()
+    }
+}
+
+impl Drop for Segment {
+    fn drop(&mut self) {
+        for backend in &mut self.backends {
+            let _ = backend.close();
+            let _ = backend.unlink();
+        }
     }
 }
 

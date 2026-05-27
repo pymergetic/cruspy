@@ -1,22 +1,21 @@
 //! Central catalog of registered memory slabs across multiple [`Segment`]s.
-//!
-//! [`Manager`] is generic over [`ManagerData`] (default: [`DefaultData`]). URL scheme
-//! selects the backend family (`ram` / `shm` / `file`); each scheme gets its own
-//! homogeneous segment, and you may create additional segments explicitly.
 
 mod data;
 mod error;
 mod usage;
 
-pub use data::{Catalog, DefaultData, ManagerData, MemEntry};
+pub use data::MemEntry;
 pub use crate::pymergetic::cruspy::memory::segment::SegmentId;
 pub use usage::{Usage, UsageReport, UsageTotals};
 
+use std::collections::HashMap;
 use std::fmt;
 
-use crate::pymergetic::cruspy::io::OpenMode;
+use crate::pymergetic::cruspy::io::{Kind, OpenMode};
 use crate::pymergetic::cruspy::memory::segment::Segment;
 use crate::pymergetic::cruspy::utils::url::Url;
+
+use error::{map_open_err, map_slab_err, map_teardown_err};
 
 /// Opaque handle for a registered slab.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -73,7 +72,7 @@ pub enum ManagerError {
     UnsupportedScheme(String),
     SchemeMismatch {
         url_scheme: String,
-        kind: crate::pymergetic::cruspy::io::Kind,
+        kind: Kind,
     },
     Backend {
         scheme: String,
@@ -118,52 +117,79 @@ impl From<crate::pymergetic::cruspy::io::KindMismatch> for ManagerError {
     }
 }
 
-/// Process-wide memory manager; storage and segment ops live in `D: [`ManagerData`].
-pub struct Manager<D: ManagerData = DefaultData> {
-    data: D,
+/// Process-wide memory registry: locators, segments, and usage.
+pub struct Manager {
+    next_mem_id: u64,
+    next_segment_id: u64,
+    by_locator: HashMap<String, Id>,
+    by_mem: HashMap<Id, MemEntry>,
+    segments: HashMap<SegmentId, Segment>,
+    /// First segment created per scheme (auto-routing for [`Self::register`]).
+    default_segment: HashMap<String, SegmentId>,
 }
 
-impl Manager<DefaultData> {
+impl Default for Manager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Manager {
     pub fn new() -> Self {
-        Self::with_data(DefaultData::new())
-    }
-}
-
-impl<D: ManagerData> Manager<D> {
-    pub fn with_data(data: D) -> Self {
-        Self { data }
-    }
-
-    pub fn data(&self) -> &D {
-        &self.data
+        Self {
+            next_mem_id: 0,
+            next_segment_id: 0,
+            by_locator: HashMap::new(),
+            by_mem: HashMap::new(),
+            segments: HashMap::new(),
+            default_segment: HashMap::new(),
+        }
     }
 
-    pub fn data_mut(&mut self) -> &mut D {
-        &mut self.data
+    fn alloc_mem_id(&mut self) -> Id {
+        let id = Id(self.next_mem_id);
+        self.next_mem_id += 1;
+        id
     }
 
-    pub fn catalog(&self) -> &Catalog {
-        self.data.catalog()
+    fn alloc_segment_id(&mut self) -> SegmentId {
+        let id = SegmentId(self.next_segment_id);
+        self.next_segment_id += 1;
+        id
     }
 
-    pub fn catalog_mut(&mut self) -> &mut Catalog {
-        self.data.catalog_mut()
-    }
-
-    pub fn create_segment(&mut self, kind: crate::pymergetic::cruspy::io::Kind) -> SegmentId {
-        self.data.create_segment(kind)
+    pub fn create_segment(&mut self, kind: Kind) -> SegmentId {
+        let id = self.alloc_segment_id();
+        self.default_segment
+            .entry(kind.scheme().to_owned())
+            .or_insert(id);
+        self.segments.insert(id, Segment::new(kind));
+        id
     }
 
     pub fn segment(&self, id: SegmentId) -> Option<&Segment> {
-        self.data.segment(id)
+        self.segments.get(&id)
     }
 
     pub fn segment_mut(&mut self, id: SegmentId) -> Option<&mut Segment> {
-        self.data.segment_mut(id)
+        self.segments.get_mut(&id)
     }
 
     pub fn segment_ids(&self) -> impl Iterator<Item = SegmentId> + '_ {
-        self.data.segment_ids()
+        self.segments.keys().copied()
+    }
+
+    fn default_segment_for_scheme(&self, scheme: &str) -> Option<SegmentId> {
+        self.default_segment.get(scheme).copied()
+    }
+
+    fn ensure_default_segment(&mut self, scheme: &str) -> Result<SegmentId, ManagerError> {
+        if let Some(id) = self.default_segment_for_scheme(scheme) {
+            return Ok(id);
+        }
+        let kind = Kind::from_scheme(scheme)
+            .ok_or_else(|| ManagerError::UnsupportedScheme(scheme.to_owned()))?;
+        Ok(self.create_segment(kind))
     }
 
     /// Register on the default segment for `url.scheme()` (created on first use).
@@ -173,7 +199,8 @@ impl<D: ManagerData> Manager<D> {
         mode: OpenMode,
         capacity: Option<usize>,
     ) -> Result<Registered, ManagerError> {
-        self.data.register(url, mode, capacity)
+        let segment_id = self.ensure_default_segment(url.scheme())?;
+        self.register_on(segment_id, url, mode, capacity)
     }
 
     /// Register on a specific segment (scheme must match segment kind).
@@ -184,7 +211,38 @@ impl<D: ManagerData> Manager<D> {
         mode: OpenMode,
         capacity: Option<usize>,
     ) -> Result<Registered, ManagerError> {
-        self.data.register_on(segment_id, url, mode, capacity)
+        let key = url.as_str();
+        if self.by_locator.contains_key(key) {
+            return Err(ManagerError::DuplicateLocator(key.to_owned()));
+        }
+
+        let segment = self
+            .segment_mut(segment_id)
+            .ok_or(ManagerError::UnknownSegment(segment_id))?;
+
+        let kind = segment.kind();
+        kind.compare_url(url)?;
+
+        let slab_index = segment
+            .open(url, mode, capacity)
+            .map_err(|e| map_open_err(kind, e))?;
+        let id = self.alloc_mem_id();
+        self.by_locator.insert(key.to_owned(), id);
+        self.by_mem.insert(
+            id,
+            MemEntry {
+                locator: url.clone(),
+                segment_id,
+                used_len: 0,
+            },
+        );
+
+        Ok(Registered {
+            id,
+            locator: url.clone(),
+            segment_id,
+            slab_index,
+        })
     }
 
     pub fn create(
@@ -204,70 +262,142 @@ impl<D: ManagerData> Manager<D> {
     }
 
     pub fn id<S: LocatorRef + ?Sized>(&self, locator: &S) -> Result<Id, ManagerError> {
-        self.catalog()
-            .by_locator
+        self.by_locator
             .get(locator.locator_key())
             .copied()
             .ok_or_else(|| ManagerError::UnknownLocator(locator.locator_key().to_owned()))
     }
 
     pub fn locator(&self, id: Id) -> Result<&Locator, ManagerError> {
-        Ok(&self.data.mem_entry(id)?.locator)
+        Ok(&self.mem_entry(id)?.locator)
     }
 
     pub fn mem_entry(&self, id: Id) -> Result<&MemEntry, ManagerError> {
-        self.data.mem_entry(id)
+        self.by_mem
+            .get(&id)
+            .ok_or(ManagerError::UnknownId(id))
+    }
+
+    fn mem_entry_mut(&mut self, id: Id) -> Result<&mut MemEntry, ManagerError> {
+        self.by_mem
+            .get_mut(&id)
+            .ok_or(ManagerError::UnknownId(id))
     }
 
     pub fn segment_id_for(&self, id: Id) -> Result<SegmentId, ManagerError> {
-        Ok(self.data.mem_entry(id)?.segment_id)
+        Ok(self.mem_entry(id)?.segment_id)
     }
 
     pub fn entries(&self) -> impl Iterator<Item = (Id, &Locator)> + '_ {
-        self.catalog()
-            .by_mem
-            .iter()
-            .map(|(id, e)| (*id, &e.locator))
+        self.by_mem.iter().map(|(id, e)| (*id, &e.locator))
     }
 
     pub fn slab_index(&self, id: Id) -> Result<usize, ManagerError> {
-        self.data.slab_index(id)
+        let entry = self.mem_entry(id)?;
+        let segment = self
+            .segment(entry.segment_id)
+            .ok_or(ManagerError::UnknownSegment(entry.segment_id))?;
+        segment
+            .locate_slab(&entry.locator)
+            .ok_or(ManagerError::SlabNotInSegment)
     }
 
     pub fn set_used_len(&mut self, id: Id, used_len: usize) -> Result<(), ManagerError> {
-        self.data.mem_entry_mut(id)?.used_len = used_len;
+        self.mem_entry_mut(id)?.used_len = used_len;
         Ok(())
     }
 
     pub fn used_len(&self, id: Id) -> Result<usize, ManagerError> {
-        Ok(self.data.mem_entry(id)?.used_len)
+        Ok(self.mem_entry(id)?.used_len)
     }
 
     pub fn usage_report(&self) -> UsageReport {
-        self.data.usage_report()
+        let mut slabs = Vec::with_capacity(self.by_mem.len());
+        let mut totals = UsageTotals::default();
+
+        for (&id, entry) in &self.by_mem {
+            let capacity = self
+                .segment(entry.segment_id)
+                .and_then(|s| {
+                    s.locate_slab(&entry.locator).and_then(|i| s.size(i))
+                })
+                .unwrap_or(0);
+            totals.slab_count += 1;
+            totals.total_capacity += capacity;
+            totals.total_used += entry.used_len;
+            slabs.push(Usage {
+                id,
+                segment_id: entry.segment_id,
+                scheme: entry.locator.scheme().to_owned(),
+                locator: entry.locator.clone(),
+                capacity,
+                used_len: entry.used_len,
+            });
+        }
+
+        slabs.sort_by(|a, b| a.id.0.cmp(&b.id.0));
+        UsageReport { slabs, totals }
     }
 
     pub fn close(&mut self, id: Id) -> Result<(), ManagerError> {
-        self.data.close_mem(id)
+        let entry = self.mem_entry(id)?.clone();
+        let key = entry.locator.as_str().to_owned();
+        let idx = self.slab_index(id)?;
+        let kind = self
+            .segment(entry.segment_id)
+            .ok_or(ManagerError::UnknownSegment(entry.segment_id))?
+            .kind();
+        self.segment_mut(entry.segment_id)
+            .ok_or(ManagerError::UnknownSegment(entry.segment_id))?
+            .close(idx)
+            .map_err(|e| map_teardown_err(kind, e))?;
+        self.by_locator.remove(&key);
+        self.by_mem.remove(&id);
+        Ok(())
     }
 
     pub fn close_all(&mut self) -> Result<(), ManagerError> {
-        self.data.close_all_mem()
+        for segment in self.segments.values_mut() {
+            let kind = segment.kind();
+            segment.close_all().map_err(|e| map_slab_err(kind, e))?;
+        }
+        self.by_locator.clear();
+        self.by_mem.clear();
+        Ok(())
     }
 
     pub fn unlink(&mut self, id: Id) -> Result<(), ManagerError> {
-        self.data.unlink_mem(id)
+        let entry = self.mem_entry(id)?.clone();
+        let key = entry.locator.as_str().to_owned();
+        let idx = self.slab_index(id)?;
+        let kind = self
+            .segment(entry.segment_id)
+            .ok_or(ManagerError::UnknownSegment(entry.segment_id))?
+            .kind();
+        self.segment_mut(entry.segment_id)
+            .ok_or(ManagerError::UnknownSegment(entry.segment_id))?
+            .unlink(idx)
+            .map_err(|e| map_teardown_err(kind, e))?;
+        self.by_locator.remove(&key);
+        self.by_mem.remove(&id);
+        Ok(())
     }
 
     pub fn unlink_all(&mut self) -> Result<(), ManagerError> {
-        self.data.unlink_all_mem()
+        for segment in self.segments.values_mut() {
+            let kind = segment.kind();
+            segment.unlink_all().map_err(|e| map_slab_err(kind, e))?;
+        }
+        self.by_locator.clear();
+        self.by_mem.clear();
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pymergetic::cruspy::io::Kind;
+    use crate::pymergetic::cruspy::io::State;
     use crate::pymergetic::cruspy::memory::backend::Ram;
     use crate::pymergetic::cruspy::memory::segment::HEADER_LEN;
 
@@ -336,7 +466,7 @@ mod tests {
     }
 
     #[test]
-    fn close_removes_registration() {
+    fn close_removes_registration_but_keeps_mapping_for_talc() {
         let mut mgr = Manager::new();
         let reg = mgr.create(&Ram::build_url("x"), Some(4096)).unwrap();
         let seg = reg.segment_id;
@@ -345,6 +475,9 @@ mod tests {
             mgr.id(&reg.locator),
             Err(ManagerError::UnknownLocator(_))
         ));
-        assert_eq!(mgr.segment(seg).unwrap().backends().len(), 0);
+        let slab = mgr.segment(seg).unwrap().backend(0).unwrap();
+        assert_eq!(slab.info().state, State::Closed);
+        assert_eq!(mgr.segment(seg).unwrap().backends().len(), 1);
+        assert_eq!(mgr.segment(seg).unwrap().size(0).unwrap(), 4096 - HEADER_LEN);
     }
 }
