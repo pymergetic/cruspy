@@ -72,12 +72,12 @@ impl<'a, T: Copy> Ref<'a, T> {
 
     pub fn read(&self) -> T {
         assert!(self.seg.bounds_ok::<T>(self.off), "Ref read OOB");
-        unsafe { ptr::read(self.seg.base.add(self.off) as *const T) }
+        unsafe { ptr::read_unaligned(self.seg.base.add(self.off) as *const T) }
     }
 
     pub fn write(&self, value: T) {
         assert!(self.seg.bounds_ok::<T>(self.off), "Ref write OOB");
-        unsafe { ptr::write(self.seg.base.add(self.off) as *mut T, value) }
+        unsafe { ptr::write_unaligned(self.seg.base.add(self.off) as *mut T, value) }
     }
 }
 

@@ -2,9 +2,8 @@
 
 use std::os::fd::AsFd;
 
-use nix::sys::mman::{mmap, MapFlags, ProtFlags};
+use nix::sys::mman::{mmap, munmap, MapFlags, ProtFlags};
 
-#[derive(Copy, Clone)]
 pub struct MappedRegion {
     pub ptr: *mut u8,
     pub len: usize,
@@ -26,5 +25,19 @@ impl MappedRegion {
             ptr: mapped.as_ptr() as *mut u8,
             len,
         })
+    }
+}
+
+impl Drop for MappedRegion {
+    fn drop(&mut self) {
+        if self.len > 0 {
+            if let Some(addr) = std::ptr::NonNull::new(self.ptr as *mut std::ffi::c_void) {
+                unsafe {
+                    let _ = munmap(addr, self.len);
+                }
+            }
+            self.ptr = std::ptr::null_mut();
+            self.len = 0;
+        }
     }
 }
