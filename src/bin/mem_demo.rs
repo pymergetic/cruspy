@@ -48,8 +48,8 @@ fn print_segment<B: HasSlab>(seg: &Segment<B>) {
             seg.size_raw(i).unwrap_or(0),
         );
         println!(
-            "      header magic={:#x} version={} offset={} len={} (HEADER_LEN={HEADER_LEN})",
-            h.magic, h.version, h.offset, h.len
+            "      header magic={:#x} version={} header_len={} offset={} len={} (HEADER_LEN={HEADER_LEN})",
+            h.magic, h.version, h.header_len, h.offset, h.len
         );
         println!(
             "      magic_ok={}",

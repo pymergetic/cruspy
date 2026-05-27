@@ -130,6 +130,7 @@ mod tests {
         let h = seg.header(0).unwrap();
         assert_eq!(h.magic, MAGIC);
         assert_eq!(h.version, VERSION);
+        assert_eq!(h.header_len as usize, HEADER_LEN);
         assert_eq!(h.offset as usize, HEADER_LEN);
         assert_eq!(h.len as usize, 4096 - HEADER_LEN);
         assert_eq!(seg.arena(0).unwrap().len(), 4096 - HEADER_LEN);

@@ -20,7 +20,7 @@ use std::mem;
 
 use talc::{source::Manual, TalcCell};
 
-use crate::pymergetic::cruspy::io::{HasMapping, HasSlab, OpenMode};
+use crate::pymergetic::cruspy::io::{HasInfo, HasMapping, HasSlab, OpenMode};
 use crate::pymergetic::cruspy::utils::url::Url;
 
 pub const DEFAULT_CAPACITY: usize = 64 * 1024;
@@ -106,9 +106,8 @@ impl<B: HasSlab> Segment<B> {
             return Err(SegmentError::CapacityRequired);
         }
 
-        let offset = HEADER_LEN as u32;
-        let len = (capacity - HEADER_LEN) as u32;
-        write_header(backend.bytes_mut(), Header::new(offset, len));
+        let arena_len = (capacity - HEADER_LEN) as u32;
+        write_header(backend.bytes_mut(), Header::new(arena_len));
         claim_arena(self, &mut backend)?;
 
         self.backends.push(backend);
@@ -189,13 +188,18 @@ impl<B: HasSlab> Segment<B> {
     }
 
     pub fn arena(&self, index: usize) -> Option<&[u8]> {
-        self.backend(index)
-            .map(|b| &b.bytes()[HEADER_LEN..])
+        self.backend(index).and_then(|b| {
+            arena_range(b.bytes(), b.info().capacity)
+                .ok()
+                .map(|r| &b.bytes()[r])
+        })
     }
 
     pub fn arena_mut(&mut self, index: usize) -> Option<&mut [u8]> {
-        self.backend_mut(index)
-            .map(|b| &mut b.bytes_mut()[HEADER_LEN..])
+        let b = self.backend_mut(index)?;
+        let capacity = b.info().capacity;
+        let range = arena_range(b.bytes(), capacity).ok()?;
+        Some(&mut b.bytes_mut()[range])
     }
 
     pub fn talc(&self) -> &TalcCell<Manual> {
@@ -261,14 +265,36 @@ fn check_header(mapping: &[u8], capacity: usize) -> Result<(), SegmentError> {
     if mapping.len() < mem::size_of::<Header>() {
         return Err(SegmentError::BadHeader);
     }
+    validate_header_layout(as_header(mapping), mapping.len(), capacity)?;
+    Ok(())
+}
+
+/// Arena slice bounds from the on-disk [`Header`] (`offset` .. `offset + len`).
+fn arena_range(mapping: &[u8], capacity: usize) -> Result<std::ops::Range<usize>, SegmentError> {
+    if mapping.len() < mem::size_of::<Header>() {
+        return Err(SegmentError::BadHeader);
+    }
     let h = as_header(mapping);
+    validate_header_layout(h, mapping.len(), capacity)?;
+    let start = h.offset as usize;
+    Ok(start..start + h.len as usize)
+}
+
+fn validate_header_layout(
+    h: &Header,
+    mapping_len: usize,
+    capacity: usize,
+) -> Result<(), SegmentError> {
     if h.magic != MAGIC || h.version != VERSION {
         return Err(SegmentError::BadHeader);
     }
+    let header_len = h.header_len as usize;
     let offset = h.offset as usize;
     let len = h.len as usize;
-    if offset != HEADER_LEN
-        || offset.saturating_add(len) > mapping.len()
+    if header_len < mem::size_of::<Header>()
+        || header_len > HEADER_LEN
+        || offset < header_len
+        || offset.saturating_add(len) > mapping_len
         || offset.saturating_add(len) > capacity
     {
         return Err(SegmentError::BadHeader);
@@ -276,11 +302,13 @@ fn check_header(mapping: &[u8], capacity: usize) -> Result<(), SegmentError> {
     Ok(())
 }
 
-fn claim_arena<B: HasMapping>(
+fn claim_arena<B: HasInfo + HasMapping>(
     seg: &Segment<B>,
     backend: &mut B,
 ) -> Result<(), SegmentError> {
-    let arena = &mut backend.bytes_mut()[HEADER_LEN..];
+    let capacity = backend.info().capacity;
+    let range = arena_range(backend.bytes(), capacity)?;
+    let arena = &mut backend.bytes_mut()[range];
     unsafe {
         seg.talc
             .claim(arena.as_mut_ptr(), arena.len())

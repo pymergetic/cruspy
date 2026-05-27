@@ -10,17 +10,22 @@ pub const HEADER_LEN: usize = 512;
 pub struct Header {
     pub magic: u32,
     pub version: u32,
+    /// Reserved prefix size in the mapping (today [`HEADER_LEN`]; may grow later).
+    pub header_len: u32,
+    /// Arena start byte offset (today equals [`header_len`](Self::header_len)).
     pub offset: u32,
     pub len: u32,
 }
 
 impl Header {
-    pub fn new(offset: u32, len: u32) -> Self {
+    pub fn new(arena_len: u32) -> Self {
+        let header_len = HEADER_LEN as u32;
         Self {
             magic: MAGIC,
             version: VERSION,
-            offset,
-            len,
+            header_len,
+            offset: header_len,
+            len: arena_len,
         }
     }
 }
