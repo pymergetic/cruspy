@@ -1,6 +1,6 @@
 //! POSIX shared memory segment.
 
-use super::{HasAccess, HasInfo, HasMapping, Info, OpenMode};
+use crate::pymergetic::cruspy::io::{HasAccess, HasInfo, HasMapping, HasResize, Info, OpenMode};
 use crate::pymergetic::cruspy::utils::url::Url;
 
 pub struct Shm {
@@ -40,5 +40,11 @@ impl HasMapping for Shm {
 
     fn bytes_mut(&mut self) -> &mut [u8] {
         &mut []
+    }
+}
+
+impl HasResize for Shm {
+    fn resize(&mut self, _new_capacity: usize) -> Result<(), Self::Error> {
+        todo!("shm::Shm::resize")
     }
 }

@@ -1,6 +1,6 @@
 //! File-mapped byte slab.
 
-use super::{HasAccess, HasInfo, HasMapping, Info, OpenMode};
+use crate::pymergetic::cruspy::io::{HasAccess, HasInfo, HasMapping, HasResize, Info, OpenMode};
 use crate::pymergetic::cruspy::utils::url::Url;
 
 pub struct File {
@@ -40,5 +40,11 @@ impl HasMapping for File {
 
     fn bytes_mut(&mut self) -> &mut [u8] {
         &mut []
+    }
+}
+
+impl HasResize for File {
+    fn resize(&mut self, _new_capacity: usize) -> Result<(), Self::Error> {
+        todo!("file::File::resize")
     }
 }

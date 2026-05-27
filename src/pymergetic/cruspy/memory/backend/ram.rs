@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use super::{HasAccess, HasInfo, HasMapping, Info, OpenMode, State};
+use crate::pymergetic::cruspy::io::{HasAccess, HasInfo, HasMapping, HasResize, Info, OpenMode, State};
 use crate::pymergetic::cruspy::utils::url::Url;
 
 /// Build `ram://<host>`.
@@ -19,6 +19,7 @@ pub enum RamError {
     HostRequired,
     ModeRequired,
     CapacityRequired,
+    NotOpen,
 }
 
 impl fmt::Display for RamError {
@@ -28,6 +29,7 @@ impl fmt::Display for RamError {
             RamError::HostRequired => write!(f, "ram url requires a host"),
             RamError::ModeRequired => write!(f, "open mode must be create or attach"),
             RamError::CapacityRequired => write!(f, "capacity required and must be > 0"),
+            RamError::NotOpen => write!(f, "ram backend is not open"),
         }
     }
 }
@@ -97,6 +99,20 @@ impl HasMapping for Ram {
     }
 }
 
+impl HasResize for Ram {
+    fn resize(&mut self, new_capacity: usize) -> Result<(), Self::Error> {
+        if self.info.state != State::Open {
+            return Err(RamError::NotOpen);
+        }
+        if new_capacity == 0 {
+            return Err(RamError::CapacityRequired);
+        }
+        self.buf.resize(new_capacity, 0);
+        self.info.capacity = new_capacity;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,7 +121,8 @@ mod tests {
     #[test]
     fn open_create_and_segment_layout() {
         let url = build_url("heap");
-        let seg = Segment::<Ram>::create(&url, Some(4096)).unwrap();
+        let mut seg = Segment::<Ram>::new();
+        seg.create(&url, Some(4096)).unwrap();
         assert_eq!(seg.backends().len(), 1);
         let ram = seg.backend(0).unwrap();
         assert_eq!(ram.info().open_mode, OpenMode::Create);
@@ -121,15 +138,35 @@ mod tests {
     #[test]
     fn add_second_slab_claims_same_talc() {
         let mut seg = Segment::<Ram>::new();
-        seg.add(Ram::create(&build_url("a"), Some(4096)).unwrap())
-            .unwrap();
-        seg.add(Ram::create(&build_url("b"), Some(8192)).unwrap())
-            .unwrap();
+        seg.create(&build_url("a"), Some(4096)).unwrap();
+        seg.create(&build_url("b"), Some(8192)).unwrap();
         assert_eq!(seg.backends().len(), 2);
+        assert_eq!(seg.size_all(), (4096 - HEADER_LEN) + (8192 - HEADER_LEN));
+        assert_eq!(seg.size_raw_all(), 4096 + 8192);
         assert_eq!(seg.header(0).unwrap().len as usize, 4096 - HEADER_LEN);
         assert_eq!(seg.header(1).unwrap().len as usize, 8192 - HEADER_LEN);
         assert_eq!(seg.arena(0).unwrap().len(), 4096 - HEADER_LEN);
         assert_eq!(seg.arena(1).unwrap().len(), 8192 - HEADER_LEN);
+    }
+
+    #[test]
+    fn resize_grows_and_shrinks_buf() {
+        let mut ram = Ram::create(&build_url("heap"), Some(4096)).unwrap();
+        ram.resize(8192).unwrap();
+        assert_eq!(ram.info().capacity, 8192);
+        assert_eq!(ram.bytes().len(), 8192);
+        ram.resize(2048).unwrap();
+        assert_eq!(ram.bytes().len(), 2048);
+    }
+
+    #[test]
+    fn add_rejects_uninitialized_mapping() {
+        let ram = Ram::create(&build_url("fresh"), Some(4096)).unwrap();
+        let mut seg = Segment::<Ram>::new();
+        assert!(matches!(
+            seg.add(ram),
+            Err(crate::pymergetic::cruspy::memory::segment::SegmentError::BadHeader)
+        ));
     }
 
     #[test]
