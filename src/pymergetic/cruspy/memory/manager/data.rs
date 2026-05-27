@@ -7,7 +7,8 @@ use crate::pymergetic::cruspy::utils::url::Url;
 
 use crate::pymergetic::cruspy::io::Kind;
 
-use super::segment::{ensure_url_matches, AnySegment, SegmentId};
+use super::segment::{map_open_err, map_slab_err, map_teardown_err, SegmentId};
+use crate::pymergetic::cruspy::memory::segment::Segment;
 use super::usage::{Usage, UsageReport, UsageTotals};
 use super::{Id, Locator, ManagerError, Registered};
 
@@ -26,7 +27,7 @@ pub struct Catalog {
     pub next_segment_id: u64,
     pub by_locator: HashMap<String, Id>,
     pub by_mem: HashMap<Id, MemEntry>,
-    pub segments: HashMap<SegmentId, AnySegment>,
+    pub segments: HashMap<SegmentId, Segment>,
     /// First segment created per scheme (auto-routing for [`Manager::register`]).
     pub default_segment: HashMap<String, SegmentId>,
 }
@@ -53,7 +54,7 @@ pub trait ManagerData {
     /// Create an empty segment for `kind` and return its id.
     fn create_segment(&mut self, kind: Kind) -> SegmentId {
         let id = self.catalog_mut().alloc_segment_id();
-        let segment = AnySegment::new(kind);
+        let segment = Segment::new(kind);
         self.catalog_mut()
             .default_segment
             .entry(kind.scheme().to_owned())
@@ -62,11 +63,11 @@ pub trait ManagerData {
         id
     }
 
-    fn segment(&self, id: SegmentId) -> Option<&AnySegment> {
+    fn segment(&self, id: SegmentId) -> Option<&Segment> {
         self.catalog().segments.get(&id)
     }
 
-    fn segment_mut(&mut self, id: SegmentId) -> Option<&mut AnySegment> {
+    fn segment_mut(&mut self, id: SegmentId) -> Option<&mut Segment> {
         self.catalog_mut().segments.get_mut(&id)
     }
 
@@ -105,9 +106,12 @@ pub trait ManagerData {
             .segment_mut(segment_id)
             .ok_or(ManagerError::UnknownSegment(segment_id))?;
 
-        ensure_url_matches(url, segment.kind())?;
+        let kind = segment.kind();
+        kind.compare_url(url)?;
 
-        let slab_index = segment.open(url, mode, capacity)?;
+        let slab_index = segment
+            .open(url, mode, capacity)
+            .map_err(|e| map_open_err(kind, e))?;
         let id = self.catalog_mut().alloc_mem_id();
         self.catalog_mut().by_locator.insert(key.to_owned(), id);
         self.catalog_mut().by_mem.insert(
@@ -169,8 +173,7 @@ pub trait ManagerData {
             let capacity = self
                 .segment(entry.segment_id)
                 .and_then(|s| {
-                    s.locate_slab(&entry.locator)
-                        .and_then(|i| s.slab_arena_len(i))
+                    s.locate_slab(&entry.locator).and_then(|i| s.size(i))
                 })
                 .unwrap_or(0);
             totals.slab_count += 1;
@@ -194,9 +197,14 @@ pub trait ManagerData {
         let entry = self.mem_entry(id)?.clone();
         let key = entry.locator.as_str().to_owned();
         let idx = self.slab_index(id)?;
+        let kind = self
+            .segment(entry.segment_id)
+            .ok_or(ManagerError::UnknownSegment(entry.segment_id))?
+            .kind();
         self.segment_mut(entry.segment_id)
             .ok_or(ManagerError::UnknownSegment(entry.segment_id))?
-            .close_slab(idx)?;
+            .close(idx)
+            .map_err(|e| map_teardown_err(kind, e))?;
         self.catalog_mut().by_locator.remove(&key);
         self.catalog_mut().by_mem.remove(&id);
         Ok(())
@@ -206,9 +214,14 @@ pub trait ManagerData {
         let entry = self.mem_entry(id)?.clone();
         let key = entry.locator.as_str().to_owned();
         let idx = self.slab_index(id)?;
+        let kind = self
+            .segment(entry.segment_id)
+            .ok_or(ManagerError::UnknownSegment(entry.segment_id))?
+            .kind();
         self.segment_mut(entry.segment_id)
             .ok_or(ManagerError::UnknownSegment(entry.segment_id))?
-            .unlink_slab(idx)?;
+            .unlink(idx)
+            .map_err(|e| map_teardown_err(kind, e))?;
         self.catalog_mut().by_locator.remove(&key);
         self.catalog_mut().by_mem.remove(&id);
         Ok(())
@@ -216,7 +229,8 @@ pub trait ManagerData {
 
     fn close_all_mem(&mut self) -> Result<(), ManagerError> {
         for segment in self.catalog_mut().segments.values_mut() {
-            segment.close_all()?;
+            let kind = segment.kind();
+            segment.close_all().map_err(|e| map_slab_err(kind, e))?;
         }
         self.catalog_mut().by_locator.clear();
         self.catalog_mut().by_mem.clear();
@@ -225,7 +239,8 @@ pub trait ManagerData {
 
     fn unlink_all_mem(&mut self) -> Result<(), ManagerError> {
         for segment in self.catalog_mut().segments.values_mut() {
-            segment.unlink_all()?;
+            let kind = segment.kind();
+            segment.unlink_all().map_err(|e| map_slab_err(kind, e))?;
         }
         self.catalog_mut().by_locator.clear();
         self.catalog_mut().by_mem.clear();

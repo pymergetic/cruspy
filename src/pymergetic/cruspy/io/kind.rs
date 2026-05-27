@@ -1,6 +1,5 @@
 //! [`Kind`] — storage family (`ram` / `shm` / `file`): URL scheme + slab type association.
 
-use super::HasSlab;
 use crate::pymergetic::cruspy::utils::url::Url;
 
 /// Backing family for a slab or homogeneous segment.
@@ -35,7 +34,8 @@ impl Kind {
         url.scheme() == self.scheme()
     }
 
-    pub fn ensure_url(&self, url: &Url) -> Result<(), KindMismatch> {
+    /// `Ok(())` when `url.scheme()` matches this kind; otherwise [`KindMismatch`].
+    pub fn compare_url(&self, url: &Url) -> Result<(), KindMismatch> {
         if self.matches_url(url) {
             Ok(())
         } else {
@@ -45,10 +45,15 @@ impl Kind {
             })
         }
     }
+
+    #[inline]
+    pub fn ensure_url(&self, url: &Url) -> Result<(), KindMismatch> {
+        self.compare_url(url)
+    }
 }
 
-/// Links a concrete slab type to its [`Kind`] (scheme + erasure key).
-pub trait HasKind: HasSlab {
+/// Links a concrete backend type to its [`Kind`] (compile-time; independent of [`HasSlab`](super::HasSlab)).
+pub trait HasKind {
     const KIND: Kind;
 }
 

@@ -9,6 +9,23 @@ pub struct Shm {
     info: Info,
 }
 
+impl Shm {
+    /// Unopened slab; use [`HasAccess::open`] or [`HasAccess::create`].
+    pub fn new() -> Self {
+        Self {
+            info: Info::empty(Self::build_url("_")),
+        }
+    }
+
+    /// Build `shm://<host>`.
+    pub fn build_url(host: impl AsRef<str>) -> Url {
+        Url::builder()
+            .scheme("shm")
+            .host(host.as_ref())
+            .build()
+    }
+}
+
 impl HasKind for Shm {
     const KIND: Kind = Kind::Shm;
 }
@@ -54,3 +71,4 @@ impl HasResize for Shm {
         todo!("shm::Shm::resize")
     }
 }
+

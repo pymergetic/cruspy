@@ -13,5 +13,5 @@ pub use info::{HasInfo, Info};
 pub use kind::{HasKind, Kind, KindMismatch};
 pub use mapping::HasMapping;
 pub use resize::HasResize;
-pub use slab::HasSlab;
+pub use slab::{HasSlab, SlabError};
 pub use state::{HasState, State};

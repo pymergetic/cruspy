@@ -5,17 +5,16 @@
 //! homogeneous segment, and you may create additional segments explicitly.
 
 mod data;
-mod segment;
+pub(crate) mod segment;
 mod usage;
 
 pub use data::{Catalog, DefaultData, ManagerData, MemEntry};
-pub use segment::{AnySegment, SegmentId, SegmentOps};
+pub use segment::SegmentId;
 pub use usage::{Usage, UsageReport, UsageTotals};
 
 use std::fmt;
 
 use crate::pymergetic::cruspy::io::OpenMode;
-use crate::pymergetic::cruspy::memory::backend::ram::Ram;
 use crate::pymergetic::cruspy::memory::segment::Segment;
 use crate::pymergetic::cruspy::utils::url::Url;
 
@@ -110,6 +109,15 @@ impl fmt::Display for ManagerError {
 
 impl std::error::Error for ManagerError {}
 
+impl From<crate::pymergetic::cruspy::io::KindMismatch> for ManagerError {
+    fn from(m: crate::pymergetic::cruspy::io::KindMismatch) -> Self {
+        Self::SchemeMismatch {
+            url_scheme: m.url_scheme,
+            kind: m.kind,
+        }
+    }
+}
+
 /// Process-wide memory manager; storage and segment ops live in `D: [`ManagerData`].
 pub struct Manager<D: ManagerData = DefaultData> {
     data: D,
@@ -146,25 +154,16 @@ impl<D: ManagerData> Manager<D> {
         self.data.create_segment(kind)
     }
 
-    pub fn segment(&self, id: SegmentId) -> Option<&AnySegment> {
+    pub fn segment(&self, id: SegmentId) -> Option<&Segment> {
         self.data.segment(id)
     }
 
-    pub fn segment_mut(&mut self, id: SegmentId) -> Option<&mut AnySegment> {
+    pub fn segment_mut(&mut self, id: SegmentId) -> Option<&mut Segment> {
         self.data.segment_mut(id)
     }
 
     pub fn segment_ids(&self) -> impl Iterator<Item = SegmentId> + '_ {
         self.data.segment_ids()
-    }
-
-    /// Typed view when you know the segment is RAM-backed.
-    pub fn segment_ram(&self, id: SegmentId) -> Option<&Segment<Ram>> {
-        self.segment(id).and_then(AnySegment::as_ram)
-    }
-
-    pub fn segment_ram_mut(&mut self, id: SegmentId) -> Option<&mut Segment<Ram>> {
-        self.segment_mut(id).and_then(AnySegment::as_ram_mut)
     }
 
     /// Register on the default segment for `url.scheme()` (created on first use).
@@ -269,17 +268,17 @@ impl<D: ManagerData> Manager<D> {
 mod tests {
     use super::*;
     use crate::pymergetic::cruspy::io::Kind;
-    use crate::pymergetic::cruspy::memory::backend::ram;
+    use crate::pymergetic::cruspy::memory::backend::Ram;
     use crate::pymergetic::cruspy::memory::segment::HEADER_LEN;
 
     #[test]
     fn register_two_slabs_same_default_segment() {
         let mut mgr = Manager::new();
         let a = mgr
-            .create(&ram::build_url("a"), Some(4096))
+            .create(&Ram::build_url("a"), Some(4096))
             .expect("create a");
         let b = mgr
-            .create(&ram::build_url("b"), Some(8192))
+            .create(&Ram::build_url("b"), Some(8192))
             .expect("create b");
         assert_eq!(a.segment_id, b.segment_id);
         assert_ne!(a.id, b.id);
@@ -300,14 +299,14 @@ mod tests {
         let s1 = mgr.create_segment(Kind::Ram);
         assert_ne!(s0, s1);
         let a = mgr
-            .register_on(s0, &ram::build_url("a"), OpenMode::Create, Some(4096))
+            .register_on(s0, &Ram::build_url("a"), OpenMode::Create, Some(4096))
             .unwrap();
         let b = mgr
-            .register_on(s1, &ram::build_url("b"), OpenMode::Create, Some(8192))
+            .register_on(s1, &Ram::build_url("b"), OpenMode::Create, Some(8192))
             .unwrap();
         assert_ne!(a.segment_id, b.segment_id);
-        assert_eq!(mgr.segment_ram(s0).unwrap().backends().len(), 1);
-        assert_eq!(mgr.segment_ram(s1).unwrap().backends().len(), 1);
+        assert_eq!(mgr.segment(s0).unwrap().backends().len(), 1);
+        assert_eq!(mgr.segment(s1).unwrap().backends().len(), 1);
     }
 
     #[test]
@@ -317,7 +316,7 @@ mod tests {
         let err = mgr
             .register_on(
                 shm_seg,
-                &ram::build_url("wrong"),
+                &Ram::build_url("wrong"),
                 OpenMode::Create,
                 Some(4096),
             )
@@ -328,7 +327,7 @@ mod tests {
     #[test]
     fn duplicate_locator_rejected() {
         let mut mgr = Manager::new();
-        let url = ram::build_url("dup");
+        let url = Ram::build_url("dup");
         mgr.create(&url, Some(4096)).unwrap();
         assert!(matches!(
             mgr.create(&url, Some(4096)),
@@ -339,13 +338,13 @@ mod tests {
     #[test]
     fn close_removes_registration() {
         let mut mgr = Manager::new();
-        let reg = mgr.create(&ram::build_url("x"), Some(4096)).unwrap();
+        let reg = mgr.create(&Ram::build_url("x"), Some(4096)).unwrap();
         let seg = reg.segment_id;
         mgr.close(reg.id).unwrap();
         assert!(matches!(
             mgr.id(&reg.locator),
             Err(ManagerError::UnknownLocator(_))
         ));
-        assert_eq!(mgr.segment_ram(seg).unwrap().backends().len(), 0);
+        assert_eq!(mgr.segment(seg).unwrap().backends().len(), 0);
     }
 }

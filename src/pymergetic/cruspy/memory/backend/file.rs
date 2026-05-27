@@ -9,6 +9,23 @@ pub struct File {
     info: Info,
 }
 
+impl File {
+    /// Unopened slab; use [`HasAccess::open`] or [`HasAccess::create`].
+    pub fn new() -> Self {
+        Self {
+            info: Info::empty(Self::build_url("_")),
+        }
+    }
+
+    /// Build `file://<path>`.
+    pub fn build_url(path: impl AsRef<str>) -> Url {
+        Url::builder()
+            .scheme("file")
+            .path(path.as_ref())
+            .build()
+    }
+}
+
 impl HasKind for File {
     const KIND: Kind = Kind::File;
 }
@@ -54,3 +71,4 @@ impl HasResize for File {
         todo!("file::File::resize")
     }
 }
+

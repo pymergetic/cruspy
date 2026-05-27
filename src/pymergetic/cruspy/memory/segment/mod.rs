@@ -8,7 +8,7 @@
 //!   **check** [`MAGIC`] / bounds, accept or [`SegmentError::BadHeader`], never overwrite.
 //!   Used by [`Self::attach`] / [`Self::open`] with [`OpenMode::Attach`] and [`Self::add`].
 //!
-//! [`Self::add`] is the low-level attach path: you already opened the [`HasAccess`] handle;
+//! [`Self::add`] is the low-level attach path: you already opened the slab;
 //! the mapping must already carry segment metadata. For a new empty mapping, use
 //! [`Self::install`] (or [`Self::create`] which opens + installs).
 
@@ -20,7 +20,7 @@ use std::mem;
 
 use talc::{source::Manual, TalcCell};
 
-use crate::pymergetic::cruspy::io::{HasInfo, HasMapping, HasSlab, OpenMode};
+use crate::pymergetic::cruspy::io::{HasSlab, Kind, OpenMode, SlabError};
 use crate::pymergetic::cruspy::utils::url::Url;
 
 pub const DEFAULT_CAPACITY: usize = 64 * 1024;
@@ -31,51 +31,59 @@ pub enum SegmentError {
     ArenaClaim,
     BadIndex,
     BadHeader,
+    UnsupportedScheme(String),
 }
 
 /// [`close`] / [`unlink`] failed on a backend, or slab index out of range.
 #[derive(Debug)]
-pub enum SegmentTeardownError<E> {
+pub enum SegmentTeardownError {
     BadIndex,
-    Backend(E),
+    Backend(SlabError),
 }
 
 /// Backend open failed, or segment layout / talc claim failed after open.
 #[derive(Debug)]
-pub enum SegmentOpenError<E> {
-    Backend(E),
+pub enum SegmentOpenError {
+    Backend(SlabError),
     Layout(SegmentError),
+    UnsupportedScheme(String),
 }
 
 /// Shared allocator over one or more opened backend mappings.
-pub struct Segment<B> {
-    backends: Vec<B>,
+pub struct Segment {
+    kind: Kind,
+    backends: Vec<Box<dyn HasSlab>>,
     talc: TalcCell<Manual>,
 }
 
-impl<B: HasSlab> Segment<B> {
-    pub fn new() -> Self {
+impl Segment {
+    pub fn new(kind: Kind) -> Self {
         Self {
+            kind,
             backends: Vec::new(),
             talc: TalcCell::new(Manual),
         }
     }
 
-    /// Open ([`HasAccess::create`]) + [`install`] — new header on empty backing.
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
+
+    /// Open ([`HasSlab::open`] create path) + [`install`] — new header on empty backing.
     pub fn create(
         &mut self,
         url: &Url,
         capacity: Option<usize>,
-    ) -> Result<usize, SegmentOpenError<B::Error>> {
+    ) -> Result<usize, SegmentOpenError> {
         self.open(url, OpenMode::Create, capacity)
     }
 
-    /// Open ([`HasAccess::attach`]) + [`add`] — existing header required, never written here.
+    /// Open ([`HasSlab::open`] attach path) + [`add`] — existing header required.
     pub fn attach(
         &mut self,
         url: &Url,
         capacity: Option<usize>,
-    ) -> Result<usize, SegmentOpenError<B::Error>> {
+    ) -> Result<usize, SegmentOpenError> {
         self.open(url, OpenMode::Attach, capacity)
     }
 
@@ -85,9 +93,17 @@ impl<B: HasSlab> Segment<B> {
         url: &Url,
         mode: OpenMode,
         capacity: Option<usize>,
-    ) -> Result<usize, SegmentOpenError<B::Error>> {
+    ) -> Result<usize, SegmentOpenError> {
         let capacity = normalize_capacity(capacity);
-        let backend = B::open(url, mode, Some(capacity))
+        let mut backend = Kind::create_from_url(url)
+            .map_err(|e| SegmentOpenError::UnsupportedScheme(e.0))?;
+        if backend.kind() != self.kind {
+            return Err(SegmentOpenError::Layout(SegmentError::UnsupportedScheme(
+                url.scheme().into(),
+            )));
+        }
+        backend
+            .open(url, mode, Some(capacity))
             .map_err(SegmentOpenError::Backend)?;
         if mode == OpenMode::Attach {
             self.add(backend).map_err(SegmentOpenError::Layout)
@@ -96,8 +112,13 @@ impl<B: HasSlab> Segment<B> {
         }
     }
 
-    /// New empty backing: write [`Header`] + claim arena. Does not open the [`Url`].
-    pub fn install(&mut self, mut backend: B) -> Result<usize, SegmentError> {
+    /// New empty backing: write [`Header`] + claim arena. HasSlab must already be open.
+    pub fn install(&mut self, mut backend: Box<dyn HasSlab>) -> Result<usize, SegmentError> {
+        if backend.kind() != self.kind {
+            return Err(SegmentError::UnsupportedScheme(
+                backend.info().url.scheme().into(),
+            ));
+        }
         let capacity = backend.info().capacity;
         if capacity < HEADER_LEN {
             return Err(SegmentError::CapacityRequired);
@@ -108,14 +129,19 @@ impl<B: HasSlab> Segment<B> {
 
         let arena_len = (capacity - HEADER_LEN) as u32;
         write_header(backend.bytes_mut(), Header::new(arena_len));
-        claim_arena(self, &mut backend)?;
+        claim_arena(&self.talc, &mut *backend)?;
 
         self.backends.push(backend);
         Ok(self.backends.len() - 1)
     }
 
     /// Existing backing: validate header only (no write), then claim arena.
-    pub fn add(&mut self, mut backend: B) -> Result<usize, SegmentError> {
+    pub fn add(&mut self, mut backend: Box<dyn HasSlab>) -> Result<usize, SegmentError> {
+        if backend.kind() != self.kind {
+            return Err(SegmentError::UnsupportedScheme(
+                backend.info().url.scheme().into(),
+            ));
+        }
         let capacity = backend.info().capacity;
         if capacity < HEADER_LEN {
             return Err(SegmentError::CapacityRequired);
@@ -125,10 +151,15 @@ impl<B: HasSlab> Segment<B> {
             return Err(SegmentError::CapacityRequired);
         }
         check_header(mapping, capacity)?;
-        claim_arena(self, &mut backend)?;
+        claim_arena(&self.talc, &mut *backend)?;
 
         self.backends.push(backend);
         Ok(self.backends.len() - 1)
+    }
+
+    /// Push an already-opened slab (convenience over [`Self::add`]).
+    pub fn push_slab<B: HasSlab + 'static>(&mut self, backend: B) -> Result<usize, SegmentError> {
+        self.add(Box::new(backend))
     }
 
     /// Arena byte length (after header) for slab `index`.
@@ -151,28 +182,28 @@ impl<B: HasSlab> Segment<B> {
         (0..self.backends.len()).filter_map(|i| self.size_raw(i)).sum()
     }
 
-    pub fn backends(&self) -> &[B] {
+    pub fn backends(&self) -> &[Box<dyn HasSlab>] {
         &self.backends
     }
 
-    pub fn backends_mut(&mut self) -> &mut [B] {
+    pub fn backends_mut(&mut self) -> &mut [Box<dyn HasSlab>] {
         &mut self.backends
     }
 
-    pub fn backend(&self, index: usize) -> Option<&B> {
-        self.backends.get(index)
+    pub fn backend(&self, index: usize) -> Option<&dyn HasSlab> {
+        self.backends.get(index).map(|b| &**b)
     }
 
-    pub fn backend_mut(&mut self, index: usize) -> Option<&mut B> {
-        self.backends.get_mut(index)
+    pub fn backend_mut(&mut self, index: usize) -> Option<&mut dyn HasSlab> {
+        self.backends.get_mut(index).map(|b| &mut **b)
     }
 
     /// Slab 0 (e.g. polyglot registry lives on this backend's header).
-    pub fn primary(&self) -> Option<&B> {
+    pub fn primary(&self) -> Option<&dyn HasSlab> {
         self.backend(0)
     }
 
-    pub fn primary_mut(&mut self) -> Option<&mut B> {
+    pub fn primary_mut(&mut self) -> Option<&mut dyn HasSlab> {
         self.backend_mut(0)
     }
 
@@ -207,7 +238,7 @@ impl<B: HasSlab> Segment<B> {
     }
 
     /// Close slab at `index` and remove it from this segment.
-    pub fn close(&mut self, index: usize) -> Result<(), SegmentTeardownError<B::Error>> {
+    pub fn close(&mut self, index: usize) -> Result<(), SegmentTeardownError> {
         let backend = self
             .backends
             .get_mut(index)
@@ -220,7 +251,7 @@ impl<B: HasSlab> Segment<B> {
     }
 
     /// Close every slab and clear the backend list (talc claims unchanged for now).
-    pub fn close_all(&mut self) -> Result<(), B::Error> {
+    pub fn close_all(&mut self) -> Result<(), SlabError> {
         for backend in &mut self.backends {
             backend.close()?;
         }
@@ -228,8 +259,8 @@ impl<B: HasSlab> Segment<B> {
         Ok(())
     }
 
-    /// Close + [`HasAccess::unlink`] slab at `index`, then remove it.
-    pub fn unlink(&mut self, index: usize) -> Result<(), SegmentTeardownError<B::Error>> {
+    /// Close + unlink slab at `index`, then remove it.
+    pub fn unlink(&mut self, index: usize) -> Result<(), SegmentTeardownError> {
         let backend = self
             .backends
             .get_mut(index)
@@ -245,13 +276,23 @@ impl<B: HasSlab> Segment<B> {
     }
 
     /// Close + unlink every slab, then clear the backend list.
-    pub fn unlink_all(&mut self) -> Result<(), B::Error> {
+    pub fn unlink_all(&mut self) -> Result<(), SlabError> {
         for backend in &mut self.backends {
             backend.close()?;
             backend.unlink()?;
         }
         self.backends.clear();
         Ok(())
+    }
+
+    pub fn locate_slab(&self, locator: &Url) -> Option<usize> {
+        self.backends
+            .iter()
+            .position(|b| b.info().url == *locator)
+    }
+
+    pub fn slab_count(&self) -> usize {
+        self.backends.len()
     }
 }
 
@@ -302,16 +343,12 @@ fn validate_header_layout(
     Ok(())
 }
 
-fn claim_arena<B: HasInfo + HasMapping>(
-    seg: &Segment<B>,
-    backend: &mut B,
-) -> Result<(), SegmentError> {
+fn claim_arena(talc: &TalcCell<Manual>, backend: &mut dyn HasSlab) -> Result<(), SegmentError> {
     let capacity = backend.info().capacity;
     let range = arena_range(backend.bytes(), capacity)?;
     let arena = &mut backend.bytes_mut()[range];
     unsafe {
-        seg.talc
-            .claim(arena.as_mut_ptr(), arena.len())
+        talc.claim(arena.as_mut_ptr(), arena.len())
             .ok_or(SegmentError::ArenaClaim)?;
     }
     Ok(())
