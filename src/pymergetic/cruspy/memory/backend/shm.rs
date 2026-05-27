@@ -1,10 +1,16 @@
 //! POSIX shared memory segment.
 
-use crate::pymergetic::cruspy::io::{HasAccess, HasInfo, HasMapping, HasResize, Info, OpenMode};
+use crate::pymergetic::cruspy::io::{
+    HasAccess, HasInfo, HasKind, HasMapping, HasResize, Info, Kind, OpenMode,
+};
 use crate::pymergetic::cruspy::utils::url::Url;
 
 pub struct Shm {
     info: Info,
+}
+
+impl HasKind for Shm {
+    const KIND: Kind = Kind::Shm;
 }
 
 impl HasInfo for Shm {

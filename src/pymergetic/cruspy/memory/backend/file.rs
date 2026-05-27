@@ -1,10 +1,16 @@
 //! File-mapped byte slab.
 
-use crate::pymergetic::cruspy::io::{HasAccess, HasInfo, HasMapping, HasResize, Info, OpenMode};
+use crate::pymergetic::cruspy::io::{
+    HasAccess, HasInfo, HasKind, HasMapping, HasResize, Info, Kind, OpenMode,
+};
 use crate::pymergetic::cruspy::utils::url::Url;
 
 pub struct File {
     info: Info,
+}
+
+impl HasKind for File {
+    const KIND: Kind = Kind::File;
 }
 
 impl HasInfo for File {

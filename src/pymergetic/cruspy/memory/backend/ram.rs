@@ -2,7 +2,9 @@
 
 use std::fmt;
 
-use crate::pymergetic::cruspy::io::{HasAccess, HasInfo, HasMapping, HasResize, Info, OpenMode, State};
+use crate::pymergetic::cruspy::io::{
+    HasAccess, HasInfo, HasKind, HasMapping, HasResize, Info, Kind, OpenMode, State,
+};
 use crate::pymergetic::cruspy::utils::url::Url;
 
 /// Build `ram://<host>`.
@@ -39,6 +41,10 @@ impl std::error::Error for RamError {}
 pub struct Ram {
     info: Info,
     buf: Vec<u8>,
+}
+
+impl HasKind for Ram {
+    const KIND: Kind = Kind::Ram;
 }
 
 impl HasInfo for Ram {
