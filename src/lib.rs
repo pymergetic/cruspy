@@ -1,11 +1,11 @@
-mod macros;
+//! Cruspy native extension.
 
-#[path = "pymergetic/cruspy/__init__.rs"]
-mod cruspy_root;
+pub mod pymergetic;
 
 use pyo3::prelude::*;
 
 #[pymodule]
-fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    cruspy_root::init_module(m)
+fn pymergetic_cruspy(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    let _ = m;
+    Ok(())
 }
