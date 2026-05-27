@@ -1,7 +1,7 @@
 //! POSIX shared memory segment.
 
 use crate::pymergetic::cruspy::io::{
-    HasAccess, HasInfo, HasKind, HasMapping, HasResize, Info, Kind, OpenMode,
+    HasAccess, HasArenaClaim, HasInfo, HasKind, HasMapping, HasResize, Info, Kind, OpenMode,
 };
 use crate::pymergetic::cruspy::utils::url::Url;
 
@@ -29,6 +29,8 @@ impl Shm {
 impl HasKind for Shm {
     const KIND: Kind = Kind::Shm;
 }
+
+impl HasArenaClaim for Shm {}
 
 impl HasInfo for Shm {
     fn info(&self) -> &Info {

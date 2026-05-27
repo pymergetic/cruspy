@@ -16,7 +16,7 @@ mod error;
 mod header;
 
 pub use error::{SegmentError, SegmentOpenError, SegmentTeardownError};
-pub use header::{Header, HEADER_LEN, MAGIC, VERSION};
+pub use header::{read_header, write_header, Header, HEADER_LEN, MAGIC, VERSION};
 
 use std::mem;
 
@@ -87,15 +87,25 @@ impl Segment {
         backend
             .open(url, mode, Some(capacity))
             .map_err(SegmentOpenError::Backend)?;
-        if mode == OpenMode::Attach {
-            self.add(backend).map_err(SegmentOpenError::Layout)
-        } else {
-            self.install(backend).map_err(SegmentOpenError::Layout)
-        }
+        self.register_slab(backend, mode == OpenMode::Create)
+            .map_err(SegmentOpenError::Layout)
     }
 
     /// New empty backing: write [`Header`] + claim arena. HasSlab must already be open.
-    pub fn install(&mut self, mut backend: Box<dyn HasSlab>) -> Result<usize, SegmentError> {
+    pub fn install(&mut self, backend: Box<dyn HasSlab>) -> Result<usize, SegmentError> {
+        self.register_slab(backend, true)
+    }
+
+    /// Existing backing: validate header only (no write), then claim arena.
+    pub fn add(&mut self, backend: Box<dyn HasSlab>) -> Result<usize, SegmentError> {
+        self.register_slab(backend, false)
+    }
+
+    fn register_slab(
+        &mut self,
+        mut backend: Box<dyn HasSlab>,
+        install_header: bool,
+    ) -> Result<usize, SegmentError> {
         if backend.kind() != self.kind {
             return Err(SegmentError::UnsupportedScheme(
                 backend.info().url.scheme().into(),
@@ -109,30 +119,13 @@ impl Segment {
             return Err(SegmentError::CapacityRequired);
         }
 
-        let arena_len = (capacity - HEADER_LEN) as u32;
-        write_header(backend.bytes_mut(), Header::new(arena_len));
-        claim_arena(&self.talc, &mut *backend)?;
+        if install_header {
+            let arena_len = (capacity - HEADER_LEN) as u32;
+            write_header(backend.bytes_mut(), Header::new(arena_len));
+        } else {
+            check_header(backend.bytes(), capacity)?;
+        }
 
-        self.backends.push(backend);
-        Ok(self.backends.len() - 1)
-    }
-
-    /// Existing backing: validate header only (no write), then claim arena.
-    pub fn add(&mut self, mut backend: Box<dyn HasSlab>) -> Result<usize, SegmentError> {
-        if backend.kind() != self.kind {
-            return Err(SegmentError::UnsupportedScheme(
-                backend.info().url.scheme().into(),
-            ));
-        }
-        let capacity = backend.info().capacity;
-        if capacity < HEADER_LEN {
-            return Err(SegmentError::CapacityRequired);
-        }
-        let mapping = backend.bytes();
-        if mapping.len() < capacity {
-            return Err(SegmentError::CapacityRequired);
-        }
-        check_header(mapping, capacity)?;
         claim_arena(&self.talc, &mut *backend)?;
 
         self.backends.push(backend);
@@ -189,8 +182,9 @@ impl Segment {
         self.backend_mut(0)
     }
 
-    pub fn header(&self, index: usize) -> Option<&Header> {
-        self.backend(index).map(|b| as_header(b.bytes()))
+    pub fn header(&self, index: usize) -> Option<Header> {
+        self.backend(index)
+            .and_then(|b| read_header(b.bytes()))
     }
 
     /// Replace the header at `index` (e.g. after attach). Does not resize the slab.
@@ -285,26 +279,20 @@ fn normalize_capacity(capacity: Option<usize>) -> usize {
 }
 
 fn check_header(mapping: &[u8], capacity: usize) -> Result<(), SegmentError> {
-    if mapping.len() < mem::size_of::<Header>() {
-        return Err(SegmentError::BadHeader);
-    }
-    validate_header_layout(as_header(mapping), mapping.len(), capacity)?;
-    Ok(())
+    let h = read_header(mapping).ok_or(SegmentError::BadHeader)?;
+    validate_header_layout(h, mapping.len(), capacity)
 }
 
 /// Arena slice bounds from the on-disk [`Header`] (`offset` .. `offset + len`).
 fn arena_range(mapping: &[u8], capacity: usize) -> Result<std::ops::Range<usize>, SegmentError> {
-    if mapping.len() < mem::size_of::<Header>() {
-        return Err(SegmentError::BadHeader);
-    }
-    let h = as_header(mapping);
+    let h = read_header(mapping).ok_or(SegmentError::BadHeader)?;
     validate_header_layout(h, mapping.len(), capacity)?;
     let start = h.offset as usize;
     Ok(start..start + h.len as usize)
 }
 
 fn validate_header_layout(
-    h: &Header,
+    h: Header,
     mapping_len: usize,
     capacity: usize,
 ) -> Result<(), SegmentError> {
@@ -333,19 +321,6 @@ fn claim_arena(talc: &TalcCell<Manual>, backend: &mut dyn HasSlab) -> Result<(),
         talc.claim(arena.as_mut_ptr(), arena.len())
             .ok_or(SegmentError::ArenaClaim)?;
     }
+    backend.set_arena_claimed(true);
     Ok(())
-}
-
-fn write_header(segment: &mut [u8], header: Header) {
-    let size = mem::size_of::<Header>();
-    segment[..size].copy_from_slice(unsafe {
-        std::slice::from_raw_parts((&raw const header) as *const u8, size)
-    });
-}
-
-/// Borrows the fixed POD prefix at the start of the mapping (no copy).
-fn as_header(segment: &[u8]) -> &Header {
-    debug_assert!(segment.len() >= mem::size_of::<Header>());
-    let ptr = segment.as_ptr().cast::<Header>();
-    unsafe { &*ptr }
 }

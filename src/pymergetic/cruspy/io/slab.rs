@@ -30,11 +30,20 @@ impl From<std::io::Error> for SlabError {
     }
 }
 
+/// Whether a slab's arena is registered with a segment [`talc`](talc::Talc) allocator.
+pub trait HasArenaClaim {
+    fn arena_claimed(&self) -> bool {
+        false
+    }
+
+    fn set_arena_claimed(&mut self, _claimed: bool) {}
+}
+
 /// Runtime slab (segment backends, [`Kind::create`](crate::pymergetic::cruspy::memory::backend::factory::Kind::create)).
 ///
 /// Implemented automatically for any type that implements [`HasKind`] + the [`HasAccess`] stack
 /// (see blanket impl below). Runtime kind: [`kind`](Self::kind); static: [`HasKind::KIND`].
-pub trait HasSlab: Send + Any {
+pub trait HasSlab: Send + Any + HasArenaClaim {
     fn kind(&self) -> Kind;
 
     fn info(&self) -> &Info;
@@ -60,7 +69,7 @@ pub trait HasSlab: Send + Any {
 
 impl<T> HasSlab for T
 where
-    T: Send + Any + HasKind + HasInfo + HasAccess + HasMapping + HasResize,
+    T: Send + Any + HasKind + HasInfo + HasAccess + HasMapping + HasResize + HasArenaClaim,
     T::Error: fmt::Display,
 {
     fn kind(&self) -> Kind {
@@ -102,6 +111,11 @@ where
     }
 
     fn resize(&mut self, new_capacity: usize) -> Result<(), SlabError> {
+        if self.arena_claimed() {
+            return Err(SlabError(
+                "resize forbidden: arena is claimed by a segment talc allocator".into(),
+            ));
+        }
         HasResize::resize(self, new_capacity).map_err(|e| SlabError(e.to_string()))
     }
 

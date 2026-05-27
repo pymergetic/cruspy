@@ -3,7 +3,8 @@
 use std::fmt;
 
 use crate::pymergetic::cruspy::io::{
-    HasAccess, HasInfo, HasKind, HasMapping, HasResize, Info, Kind, OpenMode, State,
+    HasAccess, HasArenaClaim, HasInfo, HasKind, HasMapping, HasResize, Info, Kind, OpenMode,
+    State,
 };
 use crate::pymergetic::cruspy::utils::url::Url;
 
@@ -14,6 +15,8 @@ pub enum RamError {
     ModeRequired,
     CapacityRequired,
     NotOpen,
+    /// [`Vec::resize`] would move the buffer while talc holds raw pointers into the arena.
+    ArenaClaimed,
 }
 
 impl fmt::Display for RamError {
@@ -24,6 +27,9 @@ impl fmt::Display for RamError {
             RamError::ModeRequired => write!(f, "open mode must be create or attach"),
             RamError::CapacityRequired => write!(f, "capacity required and must be > 0"),
             RamError::NotOpen => write!(f, "ram backend is not open"),
+            RamError::ArenaClaimed => {
+                write!(f, "ram resize forbidden: arena claimed by segment talc")
+            }
         }
     }
 }
@@ -33,6 +39,7 @@ impl std::error::Error for RamError {}
 pub struct Ram {
     info: Info,
     buf: Vec<u8>,
+    arena_claimed: bool,
 }
 
 impl Ram {
@@ -41,6 +48,7 @@ impl Ram {
         Self {
             info: Info::empty(Self::build_url("_")),
             buf: Vec::new(),
+            arena_claimed: false,
         }
     }
 
@@ -90,11 +98,13 @@ impl HasAccess for Ram {
                 state: State::Open,
             },
             buf: vec![0u8; capacity],
+            arena_claimed: false,
         })
     }
 
     fn close(&mut self) -> Result<(), Self::Error> {
         self.info.state = State::Closed;
+        self.arena_claimed = false;
         self.buf.clear();
         self.buf.shrink_to_fit();
         Ok(())
@@ -102,6 +112,16 @@ impl HasAccess for Ram {
 
     fn unlink(&mut self) -> Result<(), Self::Error> {
         Ok(())
+    }
+}
+
+impl HasArenaClaim for Ram {
+    fn arena_claimed(&self) -> bool {
+        self.arena_claimed
+    }
+
+    fn set_arena_claimed(&mut self, claimed: bool) {
+        self.arena_claimed = claimed;
     }
 }
 
@@ -117,6 +137,9 @@ impl HasMapping for Ram {
 
 impl HasResize for Ram {
     fn resize(&mut self, new_capacity: usize) -> Result<(), Self::Error> {
+        if self.arena_claimed {
+            return Err(RamError::ArenaClaimed);
+        }
         if self.info.state != State::Open {
             return Err(RamError::NotOpen);
         }
@@ -185,6 +208,22 @@ mod tests {
             seg.add(Box::new(ram)),
             Err(crate::pymergetic::cruspy::memory::segment::SegmentError::BadHeader)
         ));
+    }
+
+    #[test]
+    fn resize_forbidden_after_segment_claim() {
+        let url = Ram::build_url("claimed");
+        let mut seg = Segment::new(Kind::Ram);
+        seg.create(&url, Some(4096)).unwrap();
+        assert!(
+            seg.backend(0)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Ram>()
+                .unwrap()
+                .arena_claimed
+        );
+        assert!(seg.backend_mut(0).unwrap().resize(8192).is_err());
     }
 
     #[test]

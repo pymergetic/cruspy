@@ -1,7 +1,7 @@
 //! File-mapped byte slab.
 
 use crate::pymergetic::cruspy::io::{
-    HasAccess, HasInfo, HasKind, HasMapping, HasResize, Info, Kind, OpenMode,
+    HasAccess, HasArenaClaim, HasInfo, HasKind, HasMapping, HasResize, Info, Kind, OpenMode,
 };
 use crate::pymergetic::cruspy::utils::url::Url;
 
@@ -29,6 +29,8 @@ impl File {
 impl HasKind for File {
     const KIND: Kind = Kind::File;
 }
+
+impl HasArenaClaim for File {}
 
 impl HasInfo for File {
     fn info(&self) -> &Info {
