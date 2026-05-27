@@ -7,8 +7,8 @@ use crate::pymergetic::cruspy::utils::url::Url;
 
 use crate::pymergetic::cruspy::io::Kind;
 
-use super::segment::{map_open_err, map_slab_err, map_teardown_err, SegmentId};
-use crate::pymergetic::cruspy::memory::segment::Segment;
+use super::error::{map_open_err, map_slab_err, map_teardown_err};
+use crate::pymergetic::cruspy::memory::segment::{Segment, SegmentId};
 use super::usage::{Usage, UsageReport, UsageTotals};
 use super::{Id, Locator, ManagerError, Registered};
 

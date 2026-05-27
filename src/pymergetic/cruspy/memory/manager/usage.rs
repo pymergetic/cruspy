@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use super::segment::SegmentId;
+use crate::pymergetic::cruspy::memory::segment::SegmentId;
 use super::Id;
 use crate::pymergetic::cruspy::utils::url::Url;
 

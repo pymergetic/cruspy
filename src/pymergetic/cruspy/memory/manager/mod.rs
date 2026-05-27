@@ -5,11 +5,11 @@
 //! homogeneous segment, and you may create additional segments explicitly.
 
 mod data;
-pub(crate) mod segment;
+mod error;
 mod usage;
 
 pub use data::{Catalog, DefaultData, ManagerData, MemEntry};
-pub use segment::SegmentId;
+pub use crate::pymergetic::cruspy::memory::segment::SegmentId;
 pub use usage::{Usage, UsageReport, UsageTotals};
 
 use std::fmt;

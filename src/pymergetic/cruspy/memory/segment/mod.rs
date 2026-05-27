@@ -12,8 +12,10 @@
 //! the mapping must already carry segment metadata. For a new empty mapping, use
 //! [`Self::install`] (or [`Self::create`] which opens + installs).
 
+mod error;
 mod header;
 
+pub use error::{SegmentError, SegmentOpenError, SegmentTeardownError};
 pub use header::{Header, HEADER_LEN, MAGIC, VERSION};
 
 use std::mem;
@@ -25,29 +27,9 @@ use crate::pymergetic::cruspy::utils::url::Url;
 
 pub const DEFAULT_CAPACITY: usize = 64 * 1024;
 
-#[derive(Debug)]
-pub enum SegmentError {
-    CapacityRequired,
-    ArenaClaim,
-    BadIndex,
-    BadHeader,
-    UnsupportedScheme(String),
-}
-
-/// [`close`] / [`unlink`] failed on a backend, or slab index out of range.
-#[derive(Debug)]
-pub enum SegmentTeardownError {
-    BadIndex,
-    Backend(SlabError),
-}
-
-/// Backend open failed, or segment layout / talc claim failed after open.
-#[derive(Debug)]
-pub enum SegmentOpenError {
-    Backend(SlabError),
-    Layout(SegmentError),
-    UnsupportedScheme(String),
-}
+/// Opaque id for a [`Segment`] instance (e.g. in the memory manager catalog).
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct SegmentId(pub u64);
 
 /// Shared allocator over one or more opened backend mappings.
 pub struct Segment {
