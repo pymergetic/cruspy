@@ -1,61 +1,56 @@
 //! Map [`segment`](crate::pymergetic::cruspy::memory::segment) errors into [`ManagerError`](super::ManagerError).
 
-use std::fmt;
+use thiserror::Error;
 
 use crate::pymergetic::cruspy::io::{Kind, SlabError};
 use crate::pymergetic::cruspy::memory::segment::{SegmentOpenError, SegmentTeardownError};
 
 use super::{Id, SegmentId};
 
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum ManagerError {
+    #[error("locator already registered: {0}")]
     DuplicateLocator(String),
+
+    #[error("segment already open: {0}")]
     DuplicateSegment(String),
+
+    #[error("unknown segment base: {0}")]
     UnknownSegmentBase(String),
+
+    #[error("unknown locator: {0}")]
     UnknownLocator(String),
+
+    #[error("unknown mem id: {}", .0.0)]
     UnknownId(Id),
+
+    #[error("unknown segment id: {}", .0.0)]
     UnknownSegment(SegmentId),
+
+    #[error("slab not found in segment")]
     SlabNotInSegment,
+
+    #[error("unsupported url scheme: {0}")]
     UnsupportedScheme(String),
+
+    #[error("url scheme {url_scheme} does not match storage kind {}", kind.scheme())]
     SchemeMismatch {
         url_scheme: String,
         kind: Kind,
     },
+
+    #[error("{scheme} backend error: {message}")]
     Backend {
         scheme: String,
         message: String,
     },
+
+    #[error("{scheme} layout error: {detail}")]
     Layout {
         scheme: String,
         detail: String,
     },
 }
-
-impl fmt::Display for ManagerError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::DuplicateLocator(l) => write!(f, "locator already registered: {l}"),
-            Self::DuplicateSegment(l) => write!(f, "segment already open: {l}"),
-            Self::UnknownSegmentBase(l) => write!(f, "unknown segment base: {l}"),
-            Self::UnknownLocator(l) => write!(f, "unknown locator: {l}"),
-            Self::UnknownId(id) => write!(f, "unknown mem id: {}", id.0),
-            Self::UnknownSegment(id) => write!(f, "unknown segment id: {}", id.0),
-            Self::SlabNotInSegment => write!(f, "slab not found in segment"),
-            Self::UnsupportedScheme(s) => write!(f, "unsupported url scheme: {s}"),
-            Self::SchemeMismatch { url_scheme, kind } => write!(
-                f,
-                "url scheme {url_scheme} does not match storage kind {}",
-                kind.scheme()
-            ),
-            Self::Backend { scheme, message } => {
-                write!(f, "{scheme} backend error: {message}")
-            }
-            Self::Layout { scheme, detail } => write!(f, "{scheme} layout error: {detail}"),
-        }
-    }
-}
-
-impl std::error::Error for ManagerError {}
 
 impl From<crate::pymergetic::cruspy::io::KindMismatch> for ManagerError {
     fn from(m: crate::pymergetic::cruspy::io::KindMismatch) -> Self {

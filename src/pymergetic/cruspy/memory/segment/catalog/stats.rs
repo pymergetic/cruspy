@@ -200,6 +200,7 @@ mod tests {
     use crate::pymergetic::cruspy::io::Kind;
     use crate::pymergetic::cruspy::memory::backend::ram::Ram;
     use crate::pymergetic::cruspy::memory::defaults::MIN_SLAB_CAPACITY;
+    use crate::pymergetic::cruspy::memory::segment::HEADER_LEN;
 
     #[test]
     fn memory_overview_after_mount() {
