@@ -30,6 +30,8 @@ pub struct Manager {
     by_locator: HashMap<String, Id>,
     by_mem: HashMap<Id, MemEntry>,
     segments: HashMap<SegmentId, Segment>,
+    /// Base locator key → segment ([`Locator::segment_base_key`]).
+    by_segment_base: HashMap<String, SegmentId>,
     /// First segment created per scheme (auto-routing for [`Self::register`]).
     default_segment: HashMap<Locator, SegmentId>,
 }
@@ -48,6 +50,7 @@ impl Manager {
             by_locator: HashMap::new(),
             by_mem: HashMap::new(),
             segments: HashMap::new(),
+            by_segment_base: HashMap::new(),
             default_segment: HashMap::new(),
         }
     }
@@ -71,6 +74,57 @@ impl Manager {
             .or_insert(id);
         self.segments.insert(id, Segment::new(kind));
         id
+    }
+
+    /// Open a named segment: primary slab at `base` locator, type catalog on primary arena.
+    pub fn open_segment(
+        &mut self,
+        base: Locator,
+        capacity: Option<usize>,
+    ) -> Result<SegmentId, ManagerError> {
+        let key = base.base_key();
+        if self.by_segment_base.contains_key(&key) {
+            return Err(ManagerError::DuplicateSegment(key));
+        }
+        let kind = Kind::from_scheme(base.scheme())
+            .ok_or_else(|| ManagerError::UnsupportedScheme(base.scheme().to_owned()))?;
+        let id = self.alloc_segment_id();
+        let mut segment = Segment::with_base(kind, base.clone());
+        segment
+            .create_primary(capacity)
+            .map_err(|e| map_open_err(kind, e))?;
+        self.segments.insert(id, segment);
+        self.by_segment_base.insert(key, id);
+        Ok(id)
+    }
+
+    pub fn segment_id_for_base<S: LocatorRef + ?Sized>(
+        &self,
+        locator: &S,
+    ) -> Result<SegmentId, ManagerError> {
+        let key = Locator::segment_base_key(locator.locator_key());
+        self.by_segment_base
+            .get(&key)
+            .copied()
+            .ok_or_else(|| ManagerError::UnknownSegmentBase(key))
+    }
+
+    /// Add heap extension `n` (`0` → `base-0`, …) to an open segment.
+    pub fn add_extension(
+        &mut self,
+        base: Locator,
+        n: u16,
+        capacity: Option<usize>,
+    ) -> Result<usize, ManagerError> {
+        let seg_id = self.segment_id_for_base(&base)?;
+        let kind = self
+            .segment(seg_id)
+            .ok_or(ManagerError::UnknownSegment(seg_id))?
+            .kind();
+        self.segment_mut(seg_id)
+            .ok_or(ManagerError::UnknownSegment(seg_id))?
+            .add_extension(n, capacity)
+            .map_err(|e| map_open_err(kind, e))
     }
 
     pub fn segment(&self, id: SegmentId) -> Option<&Segment> {
@@ -318,7 +372,9 @@ mod tests {
     use super::*;
     use crate::pymergetic::cruspy::io::State;
     use crate::pymergetic::cruspy::memory::backend::Ram;
-    use crate::pymergetic::cruspy::memory::segment::{HEADER_LEN, MAGIC, VERSION};
+    use crate::pymergetic::cruspy::memory::segment::{
+        DEFAULT_TYPE_CATALOG_CAPACITY, HEADER_LEN, MAGIC, SLAB_ROLE_HEAP_EXT, VERSION,
+    };
 
     #[test]
     fn register_two_slabs_same_default_segment() {
@@ -396,6 +452,37 @@ mod tests {
         assert_eq!(slab.info().state, State::Closed);
         assert_eq!(mgr.segment(seg).unwrap().backends().len(), 1);
         assert_eq!(mgr.segment(seg).unwrap().size(0).unwrap(), 4096 - HEADER_LEN);
+    }
+
+    #[test]
+    fn open_segment_base_locator_and_extension() {
+        let mut mgr = Manager::new();
+        let base: Locator = Ram::build_url("seg-core").into();
+        let seg_id = mgr.open_segment(base.clone(), Some(8192)).unwrap();
+        assert_eq!(mgr.segment_id_for_base(&base).unwrap(), seg_id);
+        let seg = mgr.segment(seg_id).unwrap();
+        assert_eq!(seg.slab_count(), 1);
+        let cat = seg.type_catalog().unwrap();
+        use crate::pymergetic::cruspy::memory::segment::{TypeCatalog, TYPE_CATALOG_SELF_INDEX};
+        use crate::pymergetic::cruspy::memory::types::MetaType;
+        assert_eq!(cat.types.len(), 1);
+        assert_eq!(cat.capacity, DEFAULT_TYPE_CATALOG_CAPACITY);
+        assert_eq!(
+            cat.types[TYPE_CATALOG_SELF_INDEX as usize],
+            MetaType::from_type::<TypeCatalog>().to_header()
+        );
+        let ext_idx = mgr.add_extension(base.clone(), 0, Some(4096)).unwrap();
+        assert_eq!(ext_idx, 1);
+        let seg = mgr.segment(seg_id).unwrap();
+        assert_eq!(seg.slab_count(), 2);
+        let primary = seg.header(0).unwrap();
+        assert!(primary.is_primary());
+        assert_eq!(primary.extension_count, 2);
+        let ext = base.extension(0);
+        assert_eq!(seg.locate_slab(ext.as_url()), Some(1));
+        assert_eq!(seg.header(1).unwrap().slab_role, SLAB_ROLE_HEAP_EXT);
+        assert!(seg.header(0).unwrap().is_mounted());
+        assert!(seg.header(1).unwrap().is_mounted());
     }
 
     #[test]

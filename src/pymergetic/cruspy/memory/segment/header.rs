@@ -1,26 +1,48 @@
-//! Fixed POD at the start of every segment.
+//! Fixed POD at the start of every slab mapping in a segment.
 
 use std::mem;
 
-pub const MAGIC: u32 = 0x4352_5553; // "CRUS"
-pub const VERSION: u32 = 1;
+use crate::pymergetic::cruspy::utils::fourcc;
+
+pub const MAGIC: u32 = fourcc::fourcc("CRUS");
+pub const VERSION: u32 = 3;
 pub const HEADER_LEN: usize = 512;
 
-/// Layout prefix: arena bounds and room for fixed fields (ints, handles, …).
+pub const SLAB_ROLE_PRIMARY: u32 = 0;
+pub const SLAB_ROLE_HEAP_EXT: u32 = 1;
+
+/// Arena claimed and (for primary) pinned type catalog allocated in talc.
+pub const FLAG_MOUNTED: u32 = 1;
+
+/// Per-slab prefix: arena bounds + segment identity + catalog location in talc heap.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub struct Header {
     pub magic: u32,
     pub version: u32,
-    /// Reserved prefix size in the mapping (today [`HEADER_LEN`]; may grow later).
     pub header_len: u32,
-    /// Arena start byte offset (today equals [`header_len`](Self::header_len)).
     pub offset: u32,
     pub len: u32,
+    pub segment_uuid: [u8; 16],
+    pub slab_role: u32,
+    pub slab_index: u16,
+    pub extension_count: u16,
+    /// Arena-relative offset to pinned [`super::catalog::TypeCatalog`] in talc (primary only).
+    pub catalog_offset: u32,
+    /// Reserved byte length of the pinned catalog blob in talc (`capacity` row slots).
+    pub catalog_len: u32,
+    pub flags: u32,
 }
 
 impl Header {
-    pub fn new(arena_len: u32) -> Self {
+    pub fn new_primary(
+        arena_len: u32,
+        segment_uuid: [u8; 16],
+        catalog_offset: u32,
+        catalog_len: u32,
+        extension_count: u16,
+        flags: u32,
+    ) -> Self {
         let header_len = HEADER_LEN as u32;
         Self {
             magic: MAGIC,
@@ -28,11 +50,49 @@ impl Header {
             header_len,
             offset: header_len,
             len: arena_len,
+            segment_uuid,
+            slab_role: SLAB_ROLE_PRIMARY,
+            slab_index: 0,
+            extension_count,
+            catalog_offset,
+            catalog_len,
+            flags,
         }
+    }
+
+    pub fn new_extension(
+        arena_len: u32,
+        segment_uuid: [u8; 16],
+        slab_index: u16,
+        flags: u32,
+    ) -> Self {
+        let header_len = HEADER_LEN as u32;
+        Self {
+            magic: MAGIC,
+            version: VERSION,
+            header_len,
+            offset: header_len,
+            len: arena_len,
+            segment_uuid,
+            slab_role: SLAB_ROLE_HEAP_EXT,
+            slab_index,
+            extension_count: 0,
+            catalog_offset: 0,
+            catalog_len: 0,
+            flags,
+        }
+    }
+
+    pub fn is_primary(self) -> bool {
+        self.slab_role == SLAB_ROLE_PRIMARY
+    }
+
+    pub fn is_mounted(self) -> bool {
+        self.flags & FLAG_MOUNTED != 0
     }
 }
 
-/// Read the POD prefix from `bytes` (unaligned-safe; copies 20 bytes).
+/// Read the POD prefix from `bytes` (unaligned-safe).
 pub fn read_header(bytes: &[u8]) -> Option<Header> {
     if bytes.len() < mem::size_of::<Header>() {
         return None;

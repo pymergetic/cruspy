@@ -11,6 +11,10 @@ pub enum SegmentError {
     BadIndex,
     BadHeader,
     UnsupportedScheme(String),
+    NoBaseLocator,
+    SegmentUuidMismatch,
+    CatalogAlloc,
+    NotMounted,
 }
 
 impl fmt::Display for SegmentError {
@@ -21,6 +25,10 @@ impl fmt::Display for SegmentError {
             Self::BadIndex => write!(f, "slab index out of range"),
             Self::BadHeader => write!(f, "invalid or missing segment header"),
             Self::UnsupportedScheme(s) => write!(f, "unsupported url scheme: {s}"),
+            Self::NoBaseLocator => write!(f, "segment has no base locator"),
+            Self::SegmentUuidMismatch => write!(f, "slab segment_uuid mismatch"),
+            Self::CatalogAlloc => write!(f, "talc catalog allocation failed"),
+            Self::NotMounted => write!(f, "slab arena not mounted"),
         }
     }
 }

@@ -6,7 +6,30 @@
 use pymergetic_cruspy::pymergetic::cruspy::io::{Kind, OpenMode};
 use pymergetic_cruspy::pymergetic::cruspy::memory::backend::ram::Ram;
 use pymergetic_cruspy::pymergetic::cruspy::memory::manager::{Locator, Manager};
-use pymergetic_cruspy::pymergetic::cruspy::memory::segment::{Segment, HEADER_LEN, MAGIC, VERSION};
+use pymergetic_cruspy::pymergetic::cruspy::memory::segment::{
+    Header, Segment, TypeCatalog, MAGIC, TYPE_CATALOG_MAGIC, TYPE_CATALOG_SELF_INDEX,
+    TYPE_CATALOG_VERSION, VERSION,
+};
+use pymergetic_cruspy::pymergetic::cruspy::memory::types::{
+    FlexString, HasMetaType, MetaType, MetaTypeHeader,
+};
+use pymergetic_cruspy::pymergetic::cruspy::utils::{fourcc, uuid::Uuid};
+
+struct KnownType {
+    name: &'static str,
+    uuid: [u8; 16],
+}
+
+const KNOWN_TYPES: &[KnownType] = &[
+    KnownType {
+        name: TypeCatalog::TYPE_NAME,
+        uuid: TypeCatalog::TYPE_UUID,
+    },
+    KnownType {
+        name: FlexString::TYPE_NAME,
+        uuid: FlexString::TYPE_UUID,
+    },
+];
 
 fn main() {
     println!("cruspy mem_demo\n");
@@ -16,7 +39,44 @@ fn main() {
     demo_multi_slab();
     demo_manager_layers();
     demo_manager_full_workflow();
+    demo_open_segment_extensions();
     println!("\nok");
+}
+
+fn demo_open_segment_extensions() {
+    println!("\n== open_segment (base locator + heap extension) ==");
+    let mut mgr = Manager::new();
+    let base: Locator = Ram::build_url("demo-seg").into();
+    let seg_id = mgr
+        .open_segment(base.clone(), Some(8192))
+        .expect("open segment");
+    mgr.add_extension(base.clone(), 0, Some(4096))
+        .expect("extension 0");
+
+    let seg = mgr.segment(seg_id).expect("segment");
+    let h = seg.header(0).expect("primary header");
+    print_slab_header("  primary ", &h);
+    println!(
+        "  segment: base={} id={} slabs={} ext_count={} mounted={}",
+        base,
+        seg_id.0,
+        seg.slab_count(),
+        h.extension_count,
+        h.is_mounted()
+    );
+    println!("  extension url={}", base.extension(0));
+
+    let cat = seg.type_catalog().expect("catalog");
+    print_type_catalog("  ", &cat, h.catalog_len);
+
+    let seg = mgr.segment_mut(seg_id).expect("segment");
+    let flex_row = MetaType::from_type::<FlexString>().to_header();
+    let flex_idx = seg.register_type(flex_row).expect("register FlexString");
+    println!("  register_type(FlexString) -> type_index={flex_idx}");
+
+    let cat = seg.type_catalog().expect("catalog after register");
+    print_type_catalog("  ", &cat, h.catalog_len);
+    print_registered_types("  ", &cat);
 }
 
 fn demo_create_from_scheme() {
@@ -206,13 +266,77 @@ fn print_segment(seg: &Segment) {
             seg.size(i).unwrap_or(0),
             seg.size_raw(i).unwrap_or(0),
         );
+        print_slab_header("      ", &h);
+        if i == 0 && h.is_primary() && h.is_mounted() {
+            if let Ok(cat) = seg.type_catalog() {
+                print_type_catalog("      ", &cat, h.catalog_len);
+                print_registered_types("      ", &cat);
+            }
+        }
+    }
+}
+
+fn print_slab_header(prefix: &str, h: &Header) {
+    let magic_tag = fourcc::to_string(h.magic).unwrap_or_else(|_| format!("{:#010x}", h.magic));
+    println!(
+        "{prefix}slab header: magic={magic_tag} ({:#010x}) version={} role={} idx={} offset={} arena_len={}",
+        h.magic,
+        h.version,
+        if h.is_primary() { "primary" } else { "heap_ext" },
+        h.slab_index,
+        h.offset,
+        h.len,
+    );
+    if h.is_primary() {
         println!(
-            "      header magic={:#x} version={} header_len={} offset={} len={} (HEADER_LEN={HEADER_LEN})",
-            h.magic, h.version, h.header_len, h.offset, h.len
-        );
-        println!(
-            "      magic_ok={}",
-            h.magic == MAGIC && h.version == VERSION
+            "{prefix}  catalog: offset={} reserved_len={} (pinned talc blob)",
+            h.catalog_offset, h.catalog_len
         );
     }
+}
+
+fn print_type_catalog(prefix: &str, cat: &TypeCatalog, slab_reserved_len: u32) {
+    let magic_tag =
+        fourcc::to_string(TYPE_CATALOG_MAGIC).unwrap_or_else(|_| "CTLG?".to_string());
+    println!("{prefix}type catalog wire ({magic_tag} v{TYPE_CATALOG_VERSION}):");
+    println!(
+        "{prefix}  type_count={} type_capacity={} slots_free={}",
+        cat.type_count(),
+        cat.capacity,
+        cat.slots_remaining()
+    );
+    println!(
+        "{prefix}  used_wire={} bytes  allocated_wire={} bytes  slab.catalog_len={}",
+        cat.used_len(),
+        cat.allocated_len(),
+        slab_reserved_len
+    );
+}
+
+fn print_registered_types(prefix: &str, cat: &TypeCatalog) {
+    println!("{prefix}registered types (resolve via HasMetaType UUID):");
+    for (i, row) in cat.types.iter().enumerate() {
+        let name = resolve_type_name(row);
+        let uuid = Uuid::from_bytes(row.type_uuid);
+        let boot = if i == TYPE_CATALOG_SELF_INDEX as usize {
+            " [bootstrap]"
+        } else {
+            ""
+        };
+        println!(
+            "{prefix}  [{i}] {name}{boot}",
+        );
+        println!(
+            "{prefix}      uuid={uuid} schema_version={} flags={:#x}",
+            row.type_schema_version, row.flags
+        );
+    }
+}
+
+fn resolve_type_name(row: &MetaTypeHeader) -> &'static str {
+    KNOWN_TYPES
+        .iter()
+        .find(|k| k.uuid == row.type_uuid)
+        .map(|k| k.name)
+        .unwrap_or("<?>")
 }

@@ -10,6 +10,8 @@ use super::{Id, SegmentId};
 #[derive(Debug)]
 pub enum ManagerError {
     DuplicateLocator(String),
+    DuplicateSegment(String),
+    UnknownSegmentBase(String),
     UnknownLocator(String),
     UnknownId(Id),
     UnknownSegment(SegmentId),
@@ -33,6 +35,8 @@ impl fmt::Display for ManagerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DuplicateLocator(l) => write!(f, "locator already registered: {l}"),
+            Self::DuplicateSegment(l) => write!(f, "segment already open: {l}"),
+            Self::UnknownSegmentBase(l) => write!(f, "unknown segment base: {l}"),
             Self::UnknownLocator(l) => write!(f, "unknown locator: {l}"),
             Self::UnknownId(id) => write!(f, "unknown mem id: {}", id.0),
             Self::UnknownSegment(id) => write!(f, "unknown segment id: {}", id.0),
