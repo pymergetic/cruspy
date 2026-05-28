@@ -156,38 +156,61 @@ impl HasResize for Ram {
 mod tests {
     use super::*;
     use crate::pymergetic::cruspy::io::Kind;
+    use crate::pymergetic::cruspy::memory::defaults::MIN_SLAB_CAPACITY;
     use crate::pymergetic::cruspy::memory::segment::{Segment, HEADER_LEN, MAGIC, VERSION};
 
     #[test]
     fn open_create_and_segment_layout() {
         let url = Ram::build_url("heap");
         let mut seg = Segment::new(Kind::Ram);
-        seg.create(&url, Some(4096)).unwrap();
+        seg.create(&url, Some(MIN_SLAB_CAPACITY)).unwrap();
         assert_eq!(seg.backends().len(), 1);
         let slab = seg.backend(0).unwrap();
         assert_eq!(slab.info().open_mode, OpenMode::Create);
-        assert_eq!(slab.info().capacity, 4096);
+        assert_eq!(slab.info().capacity, MIN_SLAB_CAPACITY);
         let h = seg.header(0).unwrap();
         assert_eq!(h.magic, MAGIC);
         assert_eq!(h.version, VERSION);
         assert_eq!(h.header_len as usize, HEADER_LEN);
         assert_eq!(h.offset as usize, HEADER_LEN);
-        assert_eq!(h.len as usize, 4096 - HEADER_LEN);
-        assert_eq!(seg.arena(0).unwrap().len(), 4096 - HEADER_LEN);
+        assert_eq!(h.len as usize, MIN_SLAB_CAPACITY - HEADER_LEN);
+        assert_eq!(seg.arena(0).unwrap().len(), MIN_SLAB_CAPACITY - HEADER_LEN);
     }
 
     #[test]
     fn add_second_slab_claims_same_talc() {
         let mut seg = Segment::new(Kind::Ram);
-        seg.create(&Ram::build_url("a"), Some(4096)).unwrap();
-        seg.create(&Ram::build_url("b"), Some(8192)).unwrap();
+        seg.create(&Ram::build_url("a"), Some(MIN_SLAB_CAPACITY))
+            .unwrap();
+        seg.create(&Ram::build_url("b"), Some(MIN_SLAB_CAPACITY))
+            .unwrap();
         assert_eq!(seg.backends().len(), 2);
-        assert_eq!(seg.size_all(), (4096 - HEADER_LEN) + (8192 - HEADER_LEN));
-        assert_eq!(seg.size_raw_all(), 4096 + 8192);
-        assert_eq!(seg.header(0).unwrap().len as usize, 4096 - HEADER_LEN);
-        assert_eq!(seg.header(1).unwrap().len as usize, 8192 - HEADER_LEN);
-        assert_eq!(seg.arena(0).unwrap().len(), 4096 - HEADER_LEN);
-        assert_eq!(seg.arena(1).unwrap().len(), 8192 - HEADER_LEN);
+        assert_eq!(
+            seg.size_all(),
+            (MIN_SLAB_CAPACITY - HEADER_LEN) + (MIN_SLAB_CAPACITY - HEADER_LEN)
+        );
+        assert_eq!(seg.size_raw_all(), MIN_SLAB_CAPACITY + MIN_SLAB_CAPACITY);
+        assert_eq!(
+            seg.header(0).unwrap().len as usize,
+            MIN_SLAB_CAPACITY - HEADER_LEN
+        );
+        assert_eq!(seg.header(1).unwrap().len as usize, MIN_SLAB_CAPACITY - HEADER_LEN);
+        assert_eq!(
+            seg.arena(0).unwrap().len(),
+            MIN_SLAB_CAPACITY - HEADER_LEN
+        );
+        assert_eq!(seg.arena(1).unwrap().len(), MIN_SLAB_CAPACITY - HEADER_LEN);
+    }
+
+    #[test]
+    fn create_rejects_slab_below_minimum() {
+        let mut seg = Segment::new(Kind::Ram);
+        assert!(matches!(
+            seg.create(&Ram::build_url("tiny"), Some(4096)),
+            Err(crate::pymergetic::cruspy::memory::segment::SegmentOpenError::Layout(
+                crate::pymergetic::cruspy::memory::segment::SegmentError::CapacityRequired
+            ))
+        ));
     }
 
     #[test]
@@ -202,7 +225,7 @@ mod tests {
 
     #[test]
     fn add_rejects_uninitialized_mapping() {
-        let ram = Ram::create(&Ram::build_url("fresh"), Some(4096)).unwrap();
+        let ram = Ram::create(&Ram::build_url("fresh"), Some(MIN_SLAB_CAPACITY)).unwrap();
         let mut seg = Segment::new(Kind::Ram);
         assert!(matches!(
             seg.add(Box::new(ram)),
@@ -214,7 +237,7 @@ mod tests {
     fn resize_forbidden_after_segment_claim() {
         let url = Ram::build_url("claimed");
         let mut seg = Segment::new(Kind::Ram);
-        seg.create(&url, Some(4096)).unwrap();
+        seg.create(&url, Some(MIN_SLAB_CAPACITY)).unwrap();
         assert!(
             seg.backend(0)
                 .unwrap()

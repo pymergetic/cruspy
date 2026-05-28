@@ -1,7 +1,8 @@
 use super::TypeError;
-use crate::pymergetic::cruspy::utils::fourcc;
+use crate::pymergetic::cruspy::memory::wire::tags::record;
 
-pub const META_TYPE_MAGIC: u32 = fourcc::fourcc("MTYP");
+/// Record layout guard ([`record::MTYP`]). Type identity is [`MetaTypeHeader::type_uuid`], not this tag.
+pub const META_TYPE_MAGIC: u32 = record::MTYP;
 pub const META_TYPE_VERSION: u16 = 1;
 pub const META_TYPE_HEADER_LEN: usize = 32;
 
@@ -50,9 +51,10 @@ impl MetaType {
     }
 }
 
-/// On-segment fixed-size header row in the meta-type partition.
+/// On-segment fixed-size catalog row (see [`record::MTYP`] layout guard).
 ///
-/// Human-readable names are not stored here; resolve via [`HasMetaType::TYPE_NAME`] or tooling.
+/// **Identity:** [`type_uuid`] + [`type_schema_version`]. Human-readable names live in
+/// [`HasMetaType::TYPE_NAME`] (compile-time / tooling), not on the slab.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct MetaTypeHeader {
     pub magic: u32,

@@ -9,7 +9,7 @@ pub use data::{MemEntry, Registered};
 pub use error::ManagerError;
 pub use locator::{Locator, LocatorRef};
 pub use crate::pymergetic::cruspy::memory::segment::SegmentId;
-pub use usage::{Usage, UsageReport, UsageTotals};
+pub use usage::{format_talc_counters, Usage, UsageReport, UsageTotals};
 
 use std::collections::HashMap;
 
@@ -372,25 +372,29 @@ mod tests {
     use super::*;
     use crate::pymergetic::cruspy::io::State;
     use crate::pymergetic::cruspy::memory::backend::Ram;
+    use crate::pymergetic::cruspy::memory::defaults::MIN_SLAB_CAPACITY;
     use crate::pymergetic::cruspy::memory::segment::{
-        DEFAULT_TYPE_CATALOG_CAPACITY, HEADER_LEN, MAGIC, SLAB_ROLE_HEAP_EXT, VERSION,
+        DEFAULT_METATYPE_CATALOG_CAPACITY, DEFAULT_OBJECT_CATALOG_CAPACITY,
+    };
+    use crate::pymergetic::cruspy::memory::segment::{
+        HEADER_LEN, MAGIC, SLAB_ROLE_HEAP_EXT, VERSION,
     };
 
     #[test]
     fn register_two_slabs_same_default_segment() {
         let mut mgr = Manager::new();
         let a = mgr
-            .create(&Ram::build_url("a"), Some(4096))
+            .create(&Ram::build_url("a"), Some(MIN_SLAB_CAPACITY))
             .expect("create a");
         let b = mgr
-            .create(&Ram::build_url("b"), Some(8192))
+            .create(&Ram::build_url("b"), Some(MIN_SLAB_CAPACITY))
             .expect("create b");
         assert_eq!(a.segment_id, b.segment_id);
         assert_ne!(a.id, b.id);
         let report = mgr.usage_report();
         assert_eq!(report.totals.slab_count, 2);
-        let arena_a = 4096 - HEADER_LEN;
-        let arena_b = 8192 - HEADER_LEN;
+        let arena_a = MIN_SLAB_CAPACITY - HEADER_LEN;
+        let arena_b = MIN_SLAB_CAPACITY - HEADER_LEN;
         assert_eq!(report.totals.total_arena_len, arena_a + arena_b);
         assert_eq!(mgr.segment_ids().count(), 1);
     }
@@ -402,10 +406,15 @@ mod tests {
         let s1 = mgr.create_segment(Kind::Ram);
         assert_ne!(s0, s1);
         let a = mgr
-            .register_on(s0, &Ram::build_url("a"), OpenMode::Create, Some(4096))
+            .register_on(
+                s0,
+                &Ram::build_url("a"),
+                OpenMode::Create,
+                Some(MIN_SLAB_CAPACITY),
+            )
             .unwrap();
         let b = mgr
-            .register_on(s1, &Ram::build_url("b"), OpenMode::Create, Some(8192))
+            .register_on(s1, &Ram::build_url("b"), OpenMode::Create, Some(MIN_SLAB_CAPACITY))
             .unwrap();
         assert_ne!(a.segment_id, b.segment_id);
         assert_eq!(mgr.segment(s0).unwrap().backends().len(), 1);
@@ -421,7 +430,7 @@ mod tests {
                 shm_seg,
                 &Ram::build_url("wrong"),
                 OpenMode::Create,
-                Some(4096),
+                Some(MIN_SLAB_CAPACITY),
             )
             .unwrap_err();
         assert!(matches!(err, ManagerError::SchemeMismatch { .. }));
@@ -431,9 +440,9 @@ mod tests {
     fn duplicate_locator_rejected() {
         let mut mgr = Manager::new();
         let url = Ram::build_url("dup");
-        mgr.create(&url, Some(4096)).unwrap();
+        mgr.create(&url, Some(MIN_SLAB_CAPACITY)).unwrap();
         assert!(matches!(
-            mgr.create(&url, Some(4096)),
+            mgr.create(&url, Some(MIN_SLAB_CAPACITY)),
             Err(ManagerError::DuplicateLocator(_))
         ));
     }
@@ -441,7 +450,9 @@ mod tests {
     #[test]
     fn close_removes_registration_but_keeps_mapping_for_talc() {
         let mut mgr = Manager::new();
-        let reg = mgr.create(&Ram::build_url("x"), Some(4096)).unwrap();
+        let reg = mgr
+            .create(&Ram::build_url("x"), Some(MIN_SLAB_CAPACITY))
+            .unwrap();
         let seg = reg.segment_id;
         mgr.close(reg.id).unwrap();
         assert!(matches!(
@@ -451,27 +462,49 @@ mod tests {
         let slab = mgr.segment(seg).unwrap().backend(0).unwrap();
         assert_eq!(slab.info().state, State::Closed);
         assert_eq!(mgr.segment(seg).unwrap().backends().len(), 1);
-        assert_eq!(mgr.segment(seg).unwrap().size(0).unwrap(), 4096 - HEADER_LEN);
+        assert_eq!(
+            mgr.segment(seg).unwrap().size(0).unwrap(),
+            MIN_SLAB_CAPACITY - HEADER_LEN
+        );
+    }
+
+    #[test]
+    fn slab_below_minimum_rejected() {
+        let mut mgr = Manager::new();
+        let err = mgr
+            .create(&Ram::build_url("tiny"), Some(4096))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            ManagerError::Layout {
+                scheme,
+                detail
+            } if scheme == "ram" && detail.contains("capacity required")
+        ));
     }
 
     #[test]
     fn open_segment_base_locator_and_extension() {
         let mut mgr = Manager::new();
         let base: Locator = Ram::build_url("seg-core").into();
-        let seg_id = mgr.open_segment(base.clone(), Some(8192)).unwrap();
+        let seg_id = mgr.open_segment(base.clone(), Some(MIN_SLAB_CAPACITY)).unwrap();
         assert_eq!(mgr.segment_id_for_base(&base).unwrap(), seg_id);
         let seg = mgr.segment(seg_id).unwrap();
         assert_eq!(seg.slab_count(), 1);
-        let cat = seg.type_catalog().unwrap();
-        use crate::pymergetic::cruspy::memory::segment::{TypeCatalog, TYPE_CATALOG_SELF_INDEX};
+        let cat = seg.metatype_catalog().unwrap();
+        use crate::pymergetic::cruspy::memory::segment::{
+            MetaTypeCatalog, METATYPE_CATALOG_SELF_INDEX,
+        };
         use crate::pymergetic::cruspy::memory::types::MetaType;
-        assert_eq!(cat.types.len(), 1);
-        assert_eq!(cat.capacity, DEFAULT_TYPE_CATALOG_CAPACITY);
+        assert_eq!(cat.metatypes().len(), 1);
+        assert_eq!(cat.capacity(), DEFAULT_METATYPE_CATALOG_CAPACITY);
         assert_eq!(
-            cat.types[TYPE_CATALOG_SELF_INDEX as usize],
-            MetaType::from_type::<TypeCatalog>().to_header()
+            cat.metatypes()[METATYPE_CATALOG_SELF_INDEX as usize],
+            MetaType::from_type::<MetaTypeCatalog>().to_header()
         );
-        let ext_idx = mgr.add_extension(base.clone(), 0, Some(4096)).unwrap();
+        let obj = seg.object_catalog().unwrap();
+        assert_eq!(obj.capacity(), DEFAULT_OBJECT_CATALOG_CAPACITY);
+        let ext_idx = mgr.add_extension(base.clone(), 0, Some(MIN_SLAB_CAPACITY)).unwrap();
         assert_eq!(ext_idx, 1);
         let seg = mgr.segment(seg_id).unwrap();
         assert_eq!(seg.slab_count(), 2);
@@ -495,8 +528,10 @@ mod tests {
         assert_eq!(Locator::default_for_kind(Kind::File).scheme(), "file");
 
         // Layer 2 + 3: manager registration creates/uses one segment and installs slab headers.
-        let a = mgr.create(&Ram::build_url("flow-a"), Some(4096)).unwrap();
-        let b = mgr.create(&Ram::build_url("flow-b"), Some(8192)).unwrap();
+        let a = mgr
+            .create(&Ram::build_url("flow-a"), Some(MIN_SLAB_CAPACITY))
+            .unwrap();
+        let b = mgr.create(&Ram::build_url("flow-b"), Some(MIN_SLAB_CAPACITY)).unwrap();
         assert_eq!(a.segment_id, b.segment_id);
 
         // Catalog round-trips through id/locator with fast existence checks.
@@ -512,7 +547,7 @@ mod tests {
         let hdr = seg.header(a_index).unwrap();
         assert_eq!(hdr.magic, MAGIC);
         assert_eq!(hdr.version, VERSION);
-        assert_eq!(hdr.len as usize, 4096 - HEADER_LEN);
+        assert_eq!(hdr.len as usize, MIN_SLAB_CAPACITY - HEADER_LEN);
 
         // Logical close removes registration, but leaves slab mapping reachable for talc safety.
         mgr.close(a.id).unwrap();
@@ -520,6 +555,9 @@ mod tests {
         let seg = mgr.segment(a.segment_id).unwrap();
         let slab = seg.backend(a_index).unwrap();
         assert_eq!(slab.info().state, State::Closed);
-        assert_eq!(seg.size(a_index).unwrap(), 4096 - HEADER_LEN);
+        assert_eq!(
+            seg.size(a_index).unwrap(),
+            MIN_SLAB_CAPACITY - HEADER_LEN
+        );
     }
 }

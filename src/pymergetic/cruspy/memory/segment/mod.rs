@@ -6,16 +6,18 @@
 //!   (no `-N` suffix on the host).
 //! - The **primary** slab uses that same URL; heap extensions use `host-0`, `host-1`, …
 //!   (or path `stem-0.ext` for file).
-//! - Type metadata: first pinned talc allocation on the primary slab ([`catalog::TypeCatalog`]);
-//!   slab [`Header`] records `catalog_offset` and [`Header::FLAG_MOUNTED`].
+//! - Primary mount pins both [`catalog::MetaTypeCatalog`] (`CTLG`) and [`catalog::ObjectCatalog`] (`COBJ`)
+//!   in talc; slab [`Header`] records each blob’s arena offset and reserved length.
 
 mod catalog;
 mod error;
 mod header;
 
 pub use catalog::{
-    TypeCatalog, DEFAULT_TYPE_CATALOG_CAPACITY, TYPE_CATALOG_HEADER_LEN, TYPE_CATALOG_MAGIC,
-    TYPE_CATALOG_SELF_INDEX, TYPE_CATALOG_VERSION,
+    Catalog, CatalogKind, CatalogRow, MetaTypeCatalog, ObjectCatalog, CATALOG_HEADER_LEN,
+    DEFAULT_METATYPE_CATALOG_CAPACITY, DEFAULT_OBJECT_CATALOG_CAPACITY, METATYPE_CATALOG_HEADER_LEN,
+    METATYPE_CATALOG_MAGIC, METATYPE_CATALOG_SELF_INDEX, METATYPE_CATALOG_VERSION,
+    OBJECT_CATALOG_HEADER_LEN, OBJECT_CATALOG_MAGIC, OBJECT_CATALOG_VERSION,
 };
 pub use error::{SegmentError, SegmentOpenError, SegmentTeardownError};
 pub use header::{
@@ -23,19 +25,20 @@ pub use header::{
     SLAB_ROLE_PRIMARY, VERSION,
 };
 
-use std::alloc::Layout;
 use std::mem;
 
-use talc::base::{binning::Binning, CHUNK_UNIT};
-use talc::{min_first_heap_layout, source::Manual, DefaultBinning, TalcCell};
+use talc::{source::Manual, TalcCell};
 
 use crate::pymergetic::cruspy::io::{HasSlab, Kind, OpenMode, SlabError, State};
 use crate::pymergetic::cruspy::memory::manager::Locator;
-use crate::pymergetic::cruspy::memory::types::{MetaTypeHeader, TypeError, META_TYPE_HEADER_LEN};
+use catalog::mount_primary_catalogs;
 use crate::pymergetic::cruspy::utils::url::Url;
 use crate::pymergetic::cruspy::utils::uuid::Uuid;
 
-pub const DEFAULT_CAPACITY: usize = 64 * 1024;
+pub use crate::pymergetic::cruspy::memory::defaults::{DEFAULT_SLAB_CAPACITY, MIN_SLAB_CAPACITY};
+
+/// Default slab mapping size when `capacity` is omitted ([`DEFAULT_SLAB_CAPACITY`]).
+pub const DEFAULT_CAPACITY: usize = DEFAULT_SLAB_CAPACITY;
 
 /// Opaque id for a [`Segment`] instance (e.g. in the memory manager catalog).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -136,7 +139,8 @@ impl Segment {
         mode: OpenMode,
         capacity: Option<usize>,
     ) -> Result<usize, SegmentOpenError> {
-        let capacity = normalize_capacity(capacity);
+        let capacity =
+            normalize_capacity(capacity).map_err(SegmentOpenError::Layout)?;
         let mut backend = Kind::create_from_url(url)
             .map_err(|e| SegmentOpenError::UnsupportedScheme(e.0))?;
         if backend.kind() != self.kind {
@@ -174,7 +178,7 @@ impl Segment {
             ));
         }
         let capacity = backend.info().capacity;
-        if capacity < HEADER_LEN {
+        if capacity < MIN_SLAB_CAPACITY.max(HEADER_LEN) {
             return Err(SegmentError::CapacityRequired);
         }
         if backend.bytes().len() < capacity {
@@ -215,16 +219,20 @@ impl Segment {
         let arena_start = HEADER_LEN;
         claim_arena_span(&self.talc, backend, capacity)?;
 
-        let capacity = catalog_capacity_for_arena(arena_len as usize)?;
-        let catalog = TypeCatalog::for_mount(capacity).map_err(map_type_err)?;
-        let (catalog_offset, catalog_len) =
-            pin_catalog_in_talc(&mut self.talc, backend, &catalog, arena_start)?;
+        let (
+            metatype_catalog_offset,
+            metatype_catalog_len,
+            object_catalog_offset,
+            object_catalog_len,
+        ) = mount_primary_catalogs(&mut self.talc, backend, arena_start, arena_len)?;
 
         let header = Header::new_primary(
             arena_len,
             self.segment_uuid,
-            catalog_offset,
-            catalog_len,
+            metatype_catalog_offset,
+            metatype_catalog_len,
+            object_catalog_offset,
+            object_catalog_len,
             1,
             FLAG_MOUNTED,
         );
@@ -255,54 +263,6 @@ impl Segment {
                 write_header(backend.bytes_mut(), h);
             }
         }
-    }
-
-    /// Append a type row to the pinned catalog on the primary slab; returns `type_index`.
-    pub fn register_type(&mut self, row: MetaTypeHeader) -> Result<u32, SegmentError> {
-        let capacity = self.backends.first().ok_or(SegmentError::BadIndex)?.info().capacity;
-        let (catalog_offset, catalog_len) = {
-            let backend = self.backends.first().ok_or(SegmentError::BadIndex)?;
-            let h = read_header(backend.bytes()).ok_or(SegmentError::BadHeader)?;
-            if !h.is_primary() || !h.is_mounted() {
-                return Err(SegmentError::BadHeader);
-            }
-            (h.catalog_offset, h.catalog_len)
-        };
-        let range = {
-            let backend = self.backends.first().ok_or(SegmentError::BadIndex)?;
-            arena_range(backend.bytes(), capacity)?
-        };
-        let off = catalog_offset as usize;
-        let catalog_len = catalog_len as usize;
-        if off + catalog_len > range.len() {
-            return Err(SegmentError::BadHeader);
-        }
-        let start = range.start + off;
-        let blob = &mut self.backends[0].bytes_mut()[start..start + catalog_len];
-        let mut catalog = TypeCatalog::read_from(blob).map_err(map_type_err)?;
-        let index = catalog.append_type(row).map_err(map_type_err)?;
-        catalog.write_into(blob).map_err(map_type_err)?;
-        Ok(index)
-    }
-
-    /// Read the type catalog from the primary slab (follows [`Header::catalog_offset`]).
-    pub fn type_catalog(&self) -> Result<TypeCatalog, SegmentError> {
-        let backend = self.backends.first().ok_or(SegmentError::BadIndex)?;
-        let capacity = backend.info().capacity;
-        let h = read_header(backend.bytes()).ok_or(SegmentError::BadHeader)?;
-        if !h.is_primary() || !h.is_mounted() {
-            return Err(SegmentError::BadHeader);
-        }
-        let range = arena_range(backend.bytes(), capacity)?;
-        let off = h.catalog_offset as usize;
-        let catalog_len = h.catalog_len as usize;
-        if off + catalog_len > range.len() {
-            return Err(SegmentError::BadHeader);
-        }
-        let start = range.start + off;
-        let end = start + catalog_len;
-        TypeCatalog::read_from(&backend.bytes()[start..end])
-            .map_err(map_type_err)
     }
 
     pub fn push_slab<B: HasSlab + 'static>(&mut self, backend: B) -> Result<usize, SegmentError> {
@@ -412,6 +372,7 @@ impl Segment {
     pub fn slab_count(&self) -> usize {
         self.backends.len()
     }
+
 }
 
 impl Drop for Segment {
@@ -423,41 +384,18 @@ impl Drop for Segment {
     }
 }
 
-/// How many type rows fit in a primary arena after talc gap-list metadata.
-fn catalog_capacity_for_arena(arena_len: usize) -> Result<u32, SegmentError> {
-    let bin_count = DefaultBinning::BIN_COUNT as usize;
-    let gap_lists = bin_count * mem::size_of::<Option<std::ptr::NonNull<u8>>>();
-    let metadata_overhead = gap_lists
-        .saturating_add(mem::size_of::<usize>())
-        .saturating_add(CHUNK_UNIT * 3);
-    let available = arena_len.saturating_sub(metadata_overhead);
-    if available < TYPE_CATALOG_HEADER_LEN + META_TYPE_HEADER_LEN {
+fn normalize_capacity(capacity: Option<usize>) -> Result<usize, SegmentError> {
+    let cap = capacity.unwrap_or(DEFAULT_CAPACITY);
+    if cap < MIN_SLAB_CAPACITY {
         return Err(SegmentError::CapacityRequired);
     }
-    let max_rows = (available - TYPE_CATALOG_HEADER_LEN) / META_TYPE_HEADER_LEN;
-    let cap = max_rows.min(DEFAULT_TYPE_CATALOG_CAPACITY as usize);
-    if cap == 0 {
-        return Err(SegmentError::CapacityRequired);
-    }
-    u32::try_from(cap).map_err(|_| SegmentError::CapacityRequired)
+    Ok(cap.max(HEADER_LEN))
 }
 
-fn map_type_err(e: TypeError) -> SegmentError {
-    match e {
-        TypeError::BadHeader => SegmentError::BadHeader,
-        TypeError::OutOfBounds | TypeError::CapacityExceeded | TypeError::InvalidUtf8 => {
-            SegmentError::CapacityRequired
-        }
-    }
-}
-
-fn normalize_capacity(capacity: Option<usize>) -> usize {
-    capacity
-        .unwrap_or(DEFAULT_CAPACITY)
-        .max(HEADER_LEN)
-}
-
-fn arena_range(mapping: &[u8], capacity: usize) -> Result<std::ops::Range<usize>, SegmentError> {
+pub(crate) fn arena_range(
+    mapping: &[u8],
+    capacity: usize,
+) -> Result<std::ops::Range<usize>, SegmentError> {
     let h = read_header(mapping).ok_or(SegmentError::BadHeader)?;
     validate_header_layout(h, mapping.len(), capacity)?;
     let start = h.offset as usize;
@@ -475,8 +413,8 @@ fn validate_header_layout(
     let header_len = h.header_len as usize;
     let offset = h.offset as usize;
     let len = h.len as usize;
-    let catalog_len = h.catalog_len as usize;
-    let catalog_off = h.catalog_offset as usize;
+    let metatype_catalog_len = h.metatype_catalog_len as usize;
+    let metatype_catalog_off = h.metatype_catalog_offset as usize;
     if header_len < mem::size_of::<Header>()
         || header_len > HEADER_LEN
         || offset < header_len
@@ -485,8 +423,16 @@ fn validate_header_layout(
     {
         return Err(SegmentError::BadHeader);
     }
-    if h.is_primary() && h.is_mounted() && catalog_off.saturating_add(catalog_len) > len {
-        return Err(SegmentError::BadHeader);
+    if h.is_primary() && h.is_mounted() {
+        let object_off = h.object_catalog_offset as usize;
+        let object_len = h.object_catalog_len as usize;
+        if metatype_catalog_len == 0
+            || object_len == 0
+            || metatype_catalog_off.saturating_add(metatype_catalog_len) > len
+            || object_off.saturating_add(object_len) > len
+        {
+            return Err(SegmentError::BadHeader);
+        }
     }
     Ok(())
 }
@@ -497,39 +443,6 @@ fn claim_arena_span(
     capacity: usize,
 ) -> Result<(), SegmentError> {
     claim_subrange(talc, backend, HEADER_LEN..capacity)
-}
-
-/// First talc allocation on the primary slab; never freed (pinned type catalog).
-fn pin_catalog_in_talc(
-    talc: &mut TalcCell<Manual>,
-    backend: &dyn HasSlab,
-    catalog: &TypeCatalog,
-    arena_start: usize,
-) -> Result<(u32, u32), SegmentError> {
-    let reserved_len = catalog.allocated_len();
-    if reserved_len < TYPE_CATALOG_HEADER_LEN {
-        return Err(SegmentError::CapacityRequired);
-    }
-    let min_layout = min_first_heap_layout::<DefaultBinning>();
-    let alloc_len = reserved_len.max(min_layout.size());
-    let layout =
-        Layout::from_size_align(alloc_len, min_layout.align()).map_err(|_| SegmentError::CapacityRequired)?;
-    let ptr = unsafe { talc.get_mut().allocate(layout) }
-        .ok_or(SegmentError::CatalogAlloc)?
-        .as_ptr();
-    let mapping = backend.bytes();
-    let ptr_usize = ptr as usize;
-    let base = mapping.as_ptr() as usize;
-    if ptr_usize < base.saturating_add(arena_start) || ptr_usize >= base + mapping.len() {
-        return Err(SegmentError::BadHeader);
-    }
-    let rel = ptr_usize - base - arena_start;
-    let catalog_len = u32::try_from(reserved_len).map_err(|_| SegmentError::CapacityRequired)?;
-    let catalog_offset = u32::try_from(rel).map_err(|_| SegmentError::BadHeader)?;
-    let slice = unsafe { std::slice::from_raw_parts_mut(ptr, alloc_len) };
-    slice.fill(0);
-    catalog.write_into(slice).map_err(map_type_err)?;
-    Ok((catalog_offset, catalog_len))
 }
 
 fn claim_subrange(

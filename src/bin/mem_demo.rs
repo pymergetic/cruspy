@@ -5,13 +5,14 @@
 
 use pymergetic_cruspy::pymergetic::cruspy::io::{Kind, OpenMode};
 use pymergetic_cruspy::pymergetic::cruspy::memory::backend::ram::Ram;
-use pymergetic_cruspy::pymergetic::cruspy::memory::manager::{Locator, Manager};
+use pymergetic_cruspy::pymergetic::cruspy::memory::defaults::MIN_SLAB_CAPACITY;
+use pymergetic_cruspy::pymergetic::cruspy::memory::manager::{format_talc_counters, Locator, Manager};
 use pymergetic_cruspy::pymergetic::cruspy::memory::segment::{
-    Header, Segment, TypeCatalog, MAGIC, TYPE_CATALOG_MAGIC, TYPE_CATALOG_SELF_INDEX,
-    TYPE_CATALOG_VERSION, VERSION,
+    Header, MetaTypeCatalog, ObjectCatalog, Segment, MAGIC, METATYPE_CATALOG_MAGIC,
+    METATYPE_CATALOG_SELF_INDEX, METATYPE_CATALOG_VERSION, OBJECT_CATALOG_MAGIC, VERSION,
 };
 use pymergetic_cruspy::pymergetic::cruspy::memory::types::{
-    FlexString, HasMetaType, MetaType, MetaTypeHeader,
+    FlexString, HasMetaType, MetaTypeHeader,
 };
 use pymergetic_cruspy::pymergetic::cruspy::utils::{fourcc, uuid::Uuid};
 
@@ -22,8 +23,8 @@ struct KnownType {
 
 const KNOWN_TYPES: &[KnownType] = &[
     KnownType {
-        name: TypeCatalog::TYPE_NAME,
-        uuid: TypeCatalog::TYPE_UUID,
+        name: MetaTypeCatalog::TYPE_NAME,
+        uuid: MetaTypeCatalog::TYPE_UUID,
     },
     KnownType {
         name: FlexString::TYPE_NAME,
@@ -39,44 +40,7 @@ fn main() {
     demo_multi_slab();
     demo_manager_layers();
     demo_manager_full_workflow();
-    demo_open_segment_extensions();
     println!("\nok");
-}
-
-fn demo_open_segment_extensions() {
-    println!("\n== open_segment (base locator + heap extension) ==");
-    let mut mgr = Manager::new();
-    let base: Locator = Ram::build_url("demo-seg").into();
-    let seg_id = mgr
-        .open_segment(base.clone(), Some(8192))
-        .expect("open segment");
-    mgr.add_extension(base.clone(), 0, Some(4096))
-        .expect("extension 0");
-
-    let seg = mgr.segment(seg_id).expect("segment");
-    let h = seg.header(0).expect("primary header");
-    print_slab_header("  primary ", &h);
-    println!(
-        "  segment: base={} id={} slabs={} ext_count={} mounted={}",
-        base,
-        seg_id.0,
-        seg.slab_count(),
-        h.extension_count,
-        h.is_mounted()
-    );
-    println!("  extension url={}", base.extension(0));
-
-    let cat = seg.type_catalog().expect("catalog");
-    print_type_catalog("  ", &cat, h.catalog_len);
-
-    let seg = mgr.segment_mut(seg_id).expect("segment");
-    let flex_row = MetaType::from_type::<FlexString>().to_header();
-    let flex_idx = seg.register_type(flex_row).expect("register FlexString");
-    println!("  register_type(FlexString) -> type_index={flex_idx}");
-
-    let cat = seg.type_catalog().expect("catalog after register");
-    print_type_catalog("  ", &cat, h.catalog_len);
-    print_registered_types("  ", &cat);
 }
 
 fn demo_create_from_scheme() {
@@ -103,17 +67,22 @@ fn demo_single_slab() {
     println!("== single RAM slab ==");
     let url = Ram::build_url("heap");
     let mut seg = Segment::new(Kind::Ram);
-    seg.create(&url, Some(4096)).expect("create slab");
+    seg.create(&url, Some(MIN_SLAB_CAPACITY))
+        .expect("create slab");
     print_segment(&seg);
+    print_talc_usage("  ", &seg);
     println!("  size_all={} size_raw_all={}", seg.size_all(), seg.size_raw_all());
 }
 
 fn demo_multi_slab() {
     println!("\n== two RAM slabs, one segment / one talc ==");
     let mut seg = Segment::new(Kind::Ram);
-    seg.create(&Ram::build_url("a"), Some(4096)).expect("create a");
-    seg.create(&Ram::build_url("b"), Some(8192)).expect("create b");
+    seg.create(&Ram::build_url("a"), Some(MIN_SLAB_CAPACITY))
+        .expect("create a");
+    seg.create(&Ram::build_url("b"), Some(MIN_SLAB_CAPACITY))
+        .expect("create b");
     print_segment(&seg);
+    print_talc_usage("  ", &seg);
     println!("  size_all={} size_raw_all={}", seg.size_all(), seg.size_raw_all());
 }
 
@@ -130,10 +99,10 @@ fn demo_manager_layers() {
 
     // Layer 2+3: register two slabs through manager into one RAM segment.
     let a = mgr
-        .create(&Ram::build_url("mgr-a"), Some(4096))
+        .create(&Ram::build_url("mgr-a"), Some(MIN_SLAB_CAPACITY))
         .expect("register mgr-a");
     let b = mgr
-        .create(&Ram::build_url("mgr-b"), Some(8192))
+        .create(&Ram::build_url("mgr-b"), Some(MIN_SLAB_CAPACITY))
         .expect("register mgr-b");
     println!(
         "  registered: a(id={}, seg={}) b(id={}, seg={}) same_segment={}",
@@ -183,13 +152,13 @@ fn demo_manager_layers() {
 }
 
 fn demo_manager_full_workflow() {
-    println!("\n== manager workflow (default + additional slabs) ==");
+    println!("\n== manager workflow (seg0 manual names + seg1 base-0/-1 extensions) ==");
     let mut mgr = Manager::new();
 
     // 1) Create the default-default slab (ram://...default).
     let default_locator = Locator::default();
     let root = mgr
-        .create(default_locator.as_url(), Some(4096))
+        .create(default_locator.as_url(), Some(MIN_SLAB_CAPACITY))
         .expect("create default slab");
     println!(
         "  1) default slab: locator={} id={} seg={} idx={}",
@@ -198,10 +167,10 @@ fn demo_manager_full_workflow() {
 
     // 2) Add additional slabs in the same storage family.
     let user_idx = mgr
-        .create(&Ram::build_url("users"), Some(8192))
+        .create(&Ram::build_url("users"), Some(MIN_SLAB_CAPACITY))
         .expect("create users slab");
     let cache_idx = mgr
-        .create(&Ram::build_url("cache"), Some(16384))
+        .create(&Ram::build_url("cache"), Some(MIN_SLAB_CAPACITY))
         .expect("create cache slab");
     println!(
         "  2) added slabs: users(id={}, seg={}) cache(id={}, seg={})",
@@ -249,6 +218,89 @@ fn demo_manager_full_workflow() {
         state,
         seg.backends().len()
     );
+
+    // 6) Second segment: formal base locator + indexed heap extensions (-0, -1).
+    let base: Locator = Ram::build_url("indexed-seg").into();
+    let seg1_id = mgr
+        .open_segment(base.clone(), Some(MIN_SLAB_CAPACITY))
+        .expect("open indexed segment");
+    mgr.add_extension(base.clone(), 0, Some(MIN_SLAB_CAPACITY))
+        .expect("extension 0");
+    mgr.add_extension(base.clone(), 1, Some(MIN_SLAB_CAPACITY))
+        .expect("extension 1");
+
+    {
+        let seg1 = mgr.segment(seg1_id).expect("indexed segment");
+        let h1 = seg1.header(0).expect("primary header");
+        println!(
+            "  6) second segment: base={} seg={} (manual seg0={})",
+            base,
+            seg1_id.0,
+            root.segment_id.0
+        );
+        assert_ne!(root.segment_id, seg1_id);
+        println!(
+            "     locators: primary={} ext0={} ext1={}",
+            base,
+            base.extension(0),
+            base.extension(1)
+        );
+        for i in 0..seg1.backends().len() {
+            let url = seg1.backend(i).expect("backend").info().url.clone();
+            let hdr = seg1.header(i).expect("header");
+            println!(
+                "     slab[{i}] url={} role={} ext_count={}",
+                url,
+                if hdr.is_primary() { "primary" } else { "heap_ext" },
+                if i == 0 { h1.extension_count } else { 0 }
+            );
+        }
+    }
+
+    let flex_idx = mgr
+        .segment_mut(seg1_id)
+        .expect("indexed segment mut")
+        .register_metatype_for::<FlexString>()
+        .expect("register FlexString");
+    println!("     register_metatype_for::<FlexString>() -> type_index={flex_idx}");
+
+    let seg1 = mgr.segment(seg1_id).expect("indexed segment");
+    let h1 = seg1.header(0).expect("primary header");
+    let cat = seg1.metatype_catalog().expect("metatype catalog");
+    print_metatype_catalog("     ", &cat, h1.metatype_catalog_len);
+    print_registered_metatypes("     ", &cat);
+
+    let obj = seg1.object_catalog().expect("object catalog");
+    print_object_catalog("     ", &obj, h1.object_catalog_len);
+
+    // 7) Per-segment talc (manager report sums both segments).
+    println!("  7) talc per segment:");
+    let segment_ids: Vec<_> = mgr.segment_ids().collect();
+    for seg_id in &segment_ids {
+        let seg = mgr.segment(*seg_id).expect("segment");
+        println!("     segment {} ({} slabs):", seg_id.0, seg.backends().len());
+        print_talc_usage("       ", seg);
+    }
+    let backend_count: usize = segment_ids
+        .iter()
+        .map(|id| mgr.segment(*id).expect("segment").backends().len())
+        .sum();
+    let report = mgr.usage_report();
+    println!(
+        "     manager totals: segments={} backends={} registered_locators={} talc_claimed={} talc_allocated={}",
+        segment_ids.len(),
+        backend_count,
+        report.totals.slab_count,
+        report.totals.talc.claimed_bytes,
+        report.totals.talc.allocated_bytes
+    );
+    println!(
+        "     (registered_locators counts create() entries only; open_segment slabs are not in the locator catalog)"
+    );
+}
+
+fn print_talc_usage(prefix: &str, seg: &Segment) {
+    println!("{}", format_talc_counters(prefix, &seg.talc().counters()));
 }
 
 fn print_segment(seg: &Segment) {
@@ -268,12 +320,30 @@ fn print_segment(seg: &Segment) {
         );
         print_slab_header("      ", &h);
         if i == 0 && h.is_primary() && h.is_mounted() {
-            if let Ok(cat) = seg.type_catalog() {
-                print_type_catalog("      ", &cat, h.catalog_len);
-                print_registered_types("      ", &cat);
+            if let Ok(cat) = seg.metatype_catalog() {
+                print_metatype_catalog("      ", &cat, h.metatype_catalog_len);
+                print_registered_metatypes("      ", &cat);
             }
         }
     }
+}
+
+fn print_object_catalog(prefix: &str, cat: &ObjectCatalog, slab_reserved_len: u32) {
+    let magic_tag =
+        fourcc::to_string(OBJECT_CATALOG_MAGIC).unwrap_or_else(|_| "COBJ?".to_string());
+    println!("{prefix}object catalog wire ({magic_tag} v1):");
+    println!(
+        "{prefix}  object_count={} capacity={} slots_free={}",
+        cat.object_count(),
+        cat.capacity(),
+        cat.slots_remaining()
+    );
+    println!(
+        "{prefix}  used_wire={} bytes  allocated_wire={} bytes  slab.object_catalog_len={}",
+        cat.used_len(),
+        cat.allocated_len(),
+        slab_reserved_len
+    );
 }
 
 fn print_slab_header(prefix: &str, h: &Header) {
@@ -289,36 +359,42 @@ fn print_slab_header(prefix: &str, h: &Header) {
     );
     if h.is_primary() {
         println!(
-            "{prefix}  catalog: offset={} reserved_len={} (pinned talc blob)",
-            h.catalog_offset, h.catalog_len
+            "{prefix}  metatype_catalog: offset={} reserved_len={}",
+            h.metatype_catalog_offset, h.metatype_catalog_len
         );
+        if h.object_catalog_len > 0 {
+            println!(
+                "{prefix}  object_catalog: offset={} reserved_len={}",
+                h.object_catalog_offset, h.object_catalog_len
+            );
+        }
     }
 }
 
-fn print_type_catalog(prefix: &str, cat: &TypeCatalog, slab_reserved_len: u32) {
+fn print_metatype_catalog(prefix: &str, cat: &MetaTypeCatalog, slab_reserved_len: u32) {
     let magic_tag =
-        fourcc::to_string(TYPE_CATALOG_MAGIC).unwrap_or_else(|_| "CTLG?".to_string());
-    println!("{prefix}type catalog wire ({magic_tag} v{TYPE_CATALOG_VERSION}):");
+        fourcc::to_string(METATYPE_CATALOG_MAGIC).unwrap_or_else(|_| "CTLG?".to_string());
+    println!("{prefix}metatype catalog wire ({magic_tag} v{METATYPE_CATALOG_VERSION}):");
     println!(
-        "{prefix}  type_count={} type_capacity={} slots_free={}",
-        cat.type_count(),
-        cat.capacity,
+        "{prefix}  count={} capacity={} slots_free={}",
+        cat.count(),
+        cat.capacity(),
         cat.slots_remaining()
     );
     println!(
-        "{prefix}  used_wire={} bytes  allocated_wire={} bytes  slab.catalog_len={}",
+        "{prefix}  used_wire={} bytes  allocated_wire={} bytes  slab.metatype_catalog_len={}",
         cat.used_len(),
         cat.allocated_len(),
         slab_reserved_len
     );
 }
 
-fn print_registered_types(prefix: &str, cat: &TypeCatalog) {
-    println!("{prefix}registered types (resolve via HasMetaType UUID):");
-    for (i, row) in cat.types.iter().enumerate() {
+fn print_registered_metatypes(prefix: &str, cat: &MetaTypeCatalog) {
+    println!("{prefix}registered metatypes (resolve via HasMetaType UUID):");
+    for (i, row) in cat.metatypes().iter().enumerate() {
         let name = resolve_type_name(row);
         let uuid = Uuid::from_bytes(row.type_uuid);
-        let boot = if i == TYPE_CATALOG_SELF_INDEX as usize {
+        let boot = if i == METATYPE_CATALOG_SELF_INDEX as usize {
             " [bootstrap]"
         } else {
             ""

@@ -157,3 +157,37 @@ impl fmt::Display for UsageReport {
         write!(f, "{}", self.format(24))
     }
 }
+
+/// Human-readable talc allocator snapshot (shared [`talc::base::Counters`] shape).
+pub fn format_talc_counters(prefix: &str, c: &Counters) -> String {
+    let alloc_pct = if c.claimed_bytes == 0 {
+        0.0
+    } else {
+        (c.allocated_bytes as f64) * 100.0 / (c.claimed_bytes as f64)
+    };
+    let overhead_pct = if c.claimed_bytes == 0 {
+        0.0
+    } else {
+        (c.overhead_bytes() as f64) * 100.0 / (c.claimed_bytes as f64)
+    };
+    let avail_pct = if c.claimed_bytes == 0 {
+        0.0
+    } else {
+        (c.available_bytes as f64) * 100.0 / (c.claimed_bytes as f64)
+    };
+    format!(
+        "{prefix}talc heap (one allocator per segment):\n\
+         {prefix}  claimed={} B  available={} B ({avail_pct:.1}% of claimed)\n\
+         {prefix}  allocated={} B ({alloc_pct:.1}% of claimed)  overhead={} B ({overhead_pct:.1}%)\n\
+         {prefix}  live_allocs={} (total ever={})  fragments={}  heaps={} (total ever={})",
+        c.claimed_bytes,
+        c.available_bytes,
+        c.allocated_bytes,
+        c.overhead_bytes(),
+        c.allocation_count,
+        c.total_allocation_count,
+        c.fragment_count,
+        c.heap_count,
+        c.total_heap_count,
+    )
+}

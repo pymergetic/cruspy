@@ -2,16 +2,17 @@
 
 use std::mem;
 
-use crate::pymergetic::cruspy::utils::fourcc;
+use crate::pymergetic::cruspy::memory::wire::tags::slab;
 
-pub const MAGIC: u32 = fourcc::fourcc("CRUS");
-pub const VERSION: u32 = 3;
+/// Slab envelope FourCC ([`slab::CRUS`]).
+pub const MAGIC: u32 = slab::CRUS;
+pub const VERSION: u32 = 4;
 pub const HEADER_LEN: usize = 512;
 
 pub const SLAB_ROLE_PRIMARY: u32 = 0;
 pub const SLAB_ROLE_HEAP_EXT: u32 = 1;
 
-/// Arena claimed and (for primary) pinned type catalog allocated in talc.
+/// Arena claimed and (for primary) pinned metatype + object catalogs allocated in talc.
 pub const FLAG_MOUNTED: u32 = 1;
 
 /// Per-slab prefix: arena bounds + segment identity + catalog location in talc heap.
@@ -27,10 +28,14 @@ pub struct Header {
     pub slab_role: u32,
     pub slab_index: u16,
     pub extension_count: u16,
-    /// Arena-relative offset to pinned [`super::catalog::TypeCatalog`] in talc (primary only).
-    pub catalog_offset: u32,
-    /// Reserved byte length of the pinned catalog blob in talc (`capacity` row slots).
-    pub catalog_len: u32,
+    /// Arena-relative offset to pinned [`super::catalog::MetaTypeCatalog`] (`CTLG`) in talc.
+    pub metatype_catalog_offset: u32,
+    /// Reserved byte length of the pinned metatype catalog blob.
+    pub metatype_catalog_len: u32,
+    /// Arena-relative offset to pinned [`super::catalog::ObjectCatalog`] (`COBJ`) in talc.
+    pub object_catalog_offset: u32,
+    /// Reserved byte length of the pinned object catalog blob.
+    pub object_catalog_len: u32,
     pub flags: u32,
 }
 
@@ -38,8 +43,10 @@ impl Header {
     pub fn new_primary(
         arena_len: u32,
         segment_uuid: [u8; 16],
-        catalog_offset: u32,
-        catalog_len: u32,
+        metatype_catalog_offset: u32,
+        metatype_catalog_len: u32,
+        object_catalog_offset: u32,
+        object_catalog_len: u32,
         extension_count: u16,
         flags: u32,
     ) -> Self {
@@ -54,8 +61,10 @@ impl Header {
             slab_role: SLAB_ROLE_PRIMARY,
             slab_index: 0,
             extension_count,
-            catalog_offset,
-            catalog_len,
+            metatype_catalog_offset,
+            metatype_catalog_len,
+            object_catalog_offset,
+            object_catalog_len,
             flags,
         }
     }
@@ -77,8 +86,10 @@ impl Header {
             slab_role: SLAB_ROLE_HEAP_EXT,
             slab_index,
             extension_count: 0,
-            catalog_offset: 0,
-            catalog_len: 0,
+            metatype_catalog_offset: 0,
+            metatype_catalog_len: 0,
+            object_catalog_offset: 0,
+            object_catalog_len: 0,
             flags,
         }
     }

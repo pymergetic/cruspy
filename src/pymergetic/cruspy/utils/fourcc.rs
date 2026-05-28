@@ -1,5 +1,8 @@
 //! Four-character ASCII codes (FourCC) packed into a `u32` (big-endian / left-to-right order).
 //!
+//! Low-level codec only. Domain tags live under [`crate::pymergetic::cruspy::memory::wire::tags`]
+//! (`slab` / `catalog` / `record`). Logical types use UUIDs ([`HasMetaType`](crate::pymergetic::cruspy::memory::types::HasMetaType)), not FourCC.
+//!
 //! Wire layouts store the value with [`to_le_bytes`](u32::to_le_bytes); the numeric
 //! constant matches readable strings like `"CTLG"` → `0x4354_4C47`.
 
@@ -69,14 +72,6 @@ pub fn to_string(v: u32) -> Result<String, FourccError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn known_tags_match_prior_hex_constants() {
-        assert_eq!(fourcc("CTLG"), 0x4354_4C47);
-        assert_eq!(fourcc("CRUS"), 0x4352_5553);
-        assert_eq!(fourcc("MTYP"), 0x4D54_5950);
-        assert_eq!(fourcc("STRS"), 0x5354_5253);
-    }
 
     #[test]
     fn roundtrip_bytes() {

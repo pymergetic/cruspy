@@ -1,8 +1,9 @@
 use super::TypeError;
 
-use crate::pymergetic::cruspy::utils::fourcc;
+use crate::pymergetic::cruspy::memory::wire::tags::record;
 
-pub const STRING_MAGIC: u32 = fourcc::fourcc("STRS");
+/// Heap string object layout guard ([`record::STRS`]), not a catalog type id.
+pub const STRING_MAGIC: u32 = record::STRS;
 pub const STRING_VERSION: u16 = 1;
 pub const STRING_HEADER_LEN: usize = 16;
 
