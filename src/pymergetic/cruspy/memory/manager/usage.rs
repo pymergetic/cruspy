@@ -2,55 +2,59 @@
 
 use std::fmt;
 
+use super::{Id, Locator};
 use crate::pymergetic::cruspy::memory::segment::SegmentId;
-use super::Id;
-use crate::pymergetic::cruspy::utils::url::Url;
+use talc::base::Counters;
 
-/// Per-slab usage snapshot (arena capacity + manager high-water).
+/// Per-slab usage snapshot (raw mapping, fixed header, and allocator-visible arena).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Usage {
     pub id: Id,
     pub segment_id: SegmentId,
     pub scheme: String,
-    pub locator: Url,
-    pub capacity: usize,
-    pub used_len: usize,
+    pub locator: Locator,
+    /// Full mapped length for this slab.
+    pub raw_len: usize,
+    /// Fixed segment header bytes (raw - arena).
+    pub header_len: usize,
+    /// Arena bytes made available to talc.
+    pub arena_len: usize,
 }
 
 impl Usage {
-    pub fn free_len(&self) -> usize {
-        self.capacity.saturating_sub(self.used_len)
-    }
-
-    pub fn utilization(&self) -> f64 {
-        if self.capacity == 0 {
+    pub fn header_pct_raw(&self) -> f64 {
+        if self.raw_len == 0 {
             return 0.0;
         }
-        (self.used_len as f64) / (self.capacity as f64)
+        (self.header_len as f64) * 100.0 / (self.raw_len as f64)
     }
 
-    pub fn utilization_pct(&self) -> f64 {
-        self.utilization() * 100.0
-    }
-
-    pub fn bar(&self, width: usize) -> String {
-        let width = width.max(1);
-        let filled = ((self.utilization() * width as f64).round() as usize).min(width);
-        let mut s = String::with_capacity(width);
-        for i in 0..width {
-            s.push(if i < filled { '█' } else { '·' });
+    pub fn arena_pct_raw(&self) -> f64 {
+        if self.raw_len == 0 {
+            return 0.0;
         }
-        s
+        (self.arena_len as f64) * 100.0 / (self.raw_len as f64)
     }
 
     pub fn format_line(&self, bar_width: usize) -> String {
+        let bar = {
+            let width = bar_width.max(1);
+            let filled = ((self.arena_pct_raw() / 100.0) * width as f64).round() as usize;
+            let mut s = String::with_capacity(width);
+            for i in 0..width {
+                s.push(if i < filled.min(width) { '█' } else { '·' });
+            }
+            s
+        };
         format!(
-            "{:<24} [{}] {:>5} / {:>5} B ({:>5.1}%)  id={}",
+            "{:<24} [{}] raw={:>5} arena={:>5} header={:>4} ({:>5.1}%/{:>5.1}%) id={}",
             self.locator,
-            self.bar(bar_width),
-            self.used_len,
-            self.capacity,
-            self.utilization_pct(),
+            bar,
+            self.raw_len,
+            self.arena_len,
+            self.header_len,
+            self.arena_pct_raw(),
+            self.header_pct_raw(),
             self.id.0,
         )
     }
@@ -59,24 +63,40 @@ impl Usage {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UsageTotals {
     pub slab_count: usize,
-    pub total_capacity: usize,
-    pub total_used: usize,
+    pub total_raw_len: usize,
+    pub total_header_len: usize,
+    pub total_arena_len: usize,
+    /// Aggregated allocator counters across all segments.
+    pub talc: Counters,
 }
 
 impl UsageTotals {
-    pub fn total_free(&self) -> usize {
-        self.total_capacity.saturating_sub(self.total_used)
-    }
-
-    pub fn utilization(&self) -> f64 {
-        if self.total_capacity == 0 {
+    pub fn header_pct_raw(&self) -> f64 {
+        if self.total_raw_len == 0 {
             return 0.0;
         }
-        (self.total_used as f64) / (self.total_capacity as f64)
+        (self.total_header_len as f64) * 100.0 / (self.total_raw_len as f64)
     }
 
-    pub fn utilization_pct(&self) -> f64 {
-        self.utilization() * 100.0
+    pub fn arena_pct_raw(&self) -> f64 {
+        if self.total_raw_len == 0 {
+            return 0.0;
+        }
+        (self.total_arena_len as f64) * 100.0 / (self.total_raw_len as f64)
+    }
+
+    pub fn talc_allocated_pct_claimed(&self) -> f64 {
+        if self.talc.claimed_bytes == 0 {
+            return 0.0;
+        }
+        (self.talc.allocated_bytes as f64) * 100.0 / (self.talc.claimed_bytes as f64)
+    }
+
+    pub fn talc_overhead_pct_claimed(&self) -> f64 {
+        if self.talc.claimed_bytes == 0 {
+            return 0.0;
+        }
+        (self.talc.overhead_bytes() as f64) * 100.0 / (self.talc.claimed_bytes as f64)
     }
 }
 
@@ -89,31 +109,44 @@ impl UsageReport {
     pub fn format(&self, bar_width: usize) -> String {
         let mut out = String::new();
         out.push_str("Memory manager usage\n");
-        let bar_hdr = "USED / CAPACITY";
+        let bar_hdr = "ARENA / RAW";
         out.push_str(&format!(
-            "{:<24}   {:^bw$}   {:>5}   {:>5}   {:>7}\n",
+            "{:<24}   {:^bw$}   {:>5}   {:>5}   {:>6}   {:>11}\n",
             "LOCATOR",
             bar_hdr,
-            "USED",
-            "CAP",
-            "UTIL%",
+            "RAW",
+            "ARENA",
+            "HEADER",
+            "ARENA/HEADER",
             bw = bar_width.max(bar_hdr.len()),
         ));
-        out.push_str(&"-".repeat(72));
+        out.push_str(&"-".repeat(102));
         out.push('\n');
         for u in &self.slabs {
             out.push_str(&u.format_line(bar_width));
             out.push('\n');
         }
-        out.push_str(&"-".repeat(72));
+        out.push_str(&"-".repeat(102));
         out.push('\n');
         let t = &self.totals;
         out.push_str(&format!(
-            "TOTAL ({} slabs)     used {:>5} / {:>5} B ({:.1}%)\n",
+            "TOTAL ({} slabs): raw={} arena={} header={} (arena={:.1}% header={:.1}%)\n",
             t.slab_count,
-            t.total_used,
-            t.total_capacity,
-            t.utilization_pct(),
+            t.total_raw_len,
+            t.total_arena_len,
+            t.total_header_len,
+            t.arena_pct_raw(),
+            t.header_pct_raw(),
+        ));
+        out.push_str(&format!(
+            "TALC: claimed={} available={} allocated={} overhead={} fragments={} (alloc={:.1}% overhead={:.1}% of claimed)\n",
+            t.talc.claimed_bytes,
+            t.talc.available_bytes,
+            t.talc.allocated_bytes,
+            t.talc.overhead_bytes(),
+            t.talc.fragment_count,
+            t.talc_allocated_pct_claimed(),
+            t.talc_overhead_pct_claimed(),
         ));
         out
     }
