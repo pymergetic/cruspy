@@ -28,7 +28,7 @@ impl<K: CatalogKind> PinnedCatalog for Catalog<K> {
 }
 
 /// Row slots that fit in `arena_len` after optional bytes already reserved in the arena.
-pub(crate) fn capacity_for_arena(
+pub(crate) fn capacity_for_arena<K: CatalogKind>(
     arena_len: usize,
     row_len: usize,
     default_capacity: u32,
@@ -72,7 +72,7 @@ where
     K::Row: CatalogRow,
     C: PinnedCatalog,
 {
-    let cap = capacity_for_arena(
+    let cap = capacity_for_arena::<K>(
         arena_len as usize,
         K::Row::row_len(),
         K::DEFAULT_CAPACITY,

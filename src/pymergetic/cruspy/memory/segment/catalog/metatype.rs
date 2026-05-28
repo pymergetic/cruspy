@@ -7,11 +7,11 @@ use crate::pymergetic::cruspy::memory::wire::tags::catalog;
 use crate::pymergetic::cruspy::utils::uuid::Uuid;
 
 use super::pin::PinnedCatalog;
-use super::wire::{Catalog, CatalogKind, CatalogRow, CATALOG_HEADER_LEN};
+use super::wire::{Catalog, CatalogKind, CatalogRow};
 
 pub const METATYPE_CATALOG_MAGIC: u32 = catalog::CTLG;
-pub const METATYPE_CATALOG_VERSION: u32 = 4;
-pub const METATYPE_CATALOG_HEADER_LEN: usize = CATALOG_HEADER_LEN;
+pub const METATYPE_CATALOG_VERSION: u32 = 5;
+pub const METATYPE_CATALOG_HEADER_LEN: usize = super::wire::CATALOG_HEADER_LEN;
 pub const DEFAULT_METATYPE_CATALOG_CAPACITY: u32 = 256;
 pub const METATYPE_CATALOG_SELF_INDEX: u32 = 0;
 
@@ -135,6 +135,14 @@ impl MetaTypeCatalog {
 
     pub fn get(&self, type_index: u32) -> Option<&MetaTypeHeader> {
         self.metatypes().get(type_index as usize)
+    }
+
+    pub fn for_mount_extension(capacity: u32) -> Result<Self, TypeError> {
+        Ok(Self::with_capacity(capacity))
+    }
+
+    pub fn from_flat(catalog: Catalog<MetaTypeCatalogKind>) -> Self {
+        Self(catalog)
     }
 
     pub fn ensure_registered<T: HasMetaType>(&mut self) -> Result<u32, TypeError> {

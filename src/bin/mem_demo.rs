@@ -8,11 +8,12 @@ use pymergetic_cruspy::pymergetic::cruspy::memory::backend::ram::Ram;
 use pymergetic_cruspy::pymergetic::cruspy::memory::defaults::MIN_SLAB_CAPACITY;
 use pymergetic_cruspy::pymergetic::cruspy::memory::manager::{format_talc_counters, Locator, Manager};
 use pymergetic_cruspy::pymergetic::cruspy::memory::segment::{
-    Header, MetaTypeCatalog, ObjectCatalog, Segment, MAGIC, METATYPE_CATALOG_MAGIC,
-    METATYPE_CATALOG_SELF_INDEX, METATYPE_CATALOG_VERSION, OBJECT_CATALOG_MAGIC, VERSION,
+    format_memory_overview, Header, MetaTypeCatalog, ObjectCatalog, Segment, MAGIC, METATYPE_CATALOG_MAGIC,
+    METATYPE_CATALOG_SELF_INDEX, METATYPE_CATALOG_VERSION, OBJECT_CATALOG_MAGIC,
+    OBJECT_CATALOG_VERSION, VERSION,
 };
 use pymergetic_cruspy::pymergetic::cruspy::memory::types::{
-    FlexString, HasMetaType, MetaTypeHeader,
+    FlexString, HasMetaType, MetaType, MetaTypeHeader,
 };
 use pymergetic_cruspy::pymergetic::cruspy::utils::{fourcc, uuid::Uuid};
 
@@ -40,6 +41,7 @@ fn main() {
     demo_multi_slab();
     demo_manager_layers();
     demo_manager_full_workflow();
+    demo_catalog_chain_spill();
     println!("\nok");
 }
 
@@ -267,11 +269,12 @@ fn demo_manager_full_workflow() {
     let seg1 = mgr.segment(seg1_id).expect("indexed segment");
     let h1 = seg1.header(0).expect("primary header");
     let cat = seg1.metatype_catalog().expect("metatype catalog");
-    print_metatype_catalog("     ", &cat, h1.metatype_catalog_len);
+    print_metatype_catalog("     ", &seg1, &cat, h1.metatype_catalog_len);
     print_registered_metatypes("     ", &cat);
 
     let obj = seg1.object_catalog().expect("object catalog");
-    print_object_catalog("     ", &obj, h1.object_catalog_len);
+    print_object_catalog("     ", &seg1, &obj, h1.object_catalog_len);
+    print_catalog_chain("     ", &seg1);
 
     // 7) Per-segment talc (manager report sums both segments).
     println!("  7) talc per segment:");
@@ -299,6 +302,69 @@ fn demo_manager_full_workflow() {
     );
 }
 
+fn demo_catalog_chain_spill() {
+    println!("\n== catalog chain spill (head full -> second CTLG chunk) ==");
+    let mut mgr = Manager::new();
+    let base: Locator = Ram::build_url("chain-spill").into();
+    let seg_id = mgr
+        .open_segment(base, Some(MIN_SLAB_CAPACITY))
+        .expect("open segment");
+    let seg = mgr.segment_mut(seg_id).expect("segment");
+    let cap = seg.metatype_catalog().expect("catalog").capacity() as usize;
+
+    println!("  baseline (mounted, empty chain):");
+    print_talc_usage("    ", seg);
+
+    for i in 1..cap {
+        let mut uuid = [0u8; 16];
+        uuid[..8].copy_from_slice(&(i as u64).to_le_bytes());
+        let row = MetaType::new(format!("spill.type.{i}"), uuid, 1).to_header();
+        seg.register_metatype(row).expect("register");
+    }
+    println!("  filled head: count={cap} chunks={}", seg.metatype_catalog_chunk_count().unwrap());
+    println!("  talc before spill (head full, still 1 chunk):");
+    print_talc_usage("    ", seg);
+
+    let overflow = MetaType::new("spill.type.overflow", [0xFE; 16], 1).to_header();
+    let idx = seg.register_metatype(overflow).expect("overflow register");
+    let seg = mgr.segment(seg_id).expect("segment");
+    let h = seg.header(0).expect("header");
+    let head = seg.metatype_catalog().expect("logical catalog");
+    let head_wire = seg.metatype_catalog_head().expect("head chunk");
+    let inner = head_wire.inner();
+    println!(
+        "  after spill: type_index={idx} logical_count={} chunks={} head_next_offset={} head_next_len={}",
+        head.count(),
+        seg.metatype_catalog_chunk_count().unwrap(),
+        inner.next_offset,
+        inner.next_len,
+    );
+    println!("  talc after spill (2 CTLG chunks + COBJ):");
+    print_talc_usage("    ", seg);
+    print_metatype_catalog("  ", seg, &head, h.metatype_catalog_len);
+    print_memory_overview("  ", seg);
+}
+
+fn print_memory_overview(prefix: &str, seg: &Segment) {
+    let overview = seg.memory_overview().expect("memory overview");
+    for line in format_memory_overview(&overview).lines() {
+        println!("{prefix}{line}");
+    }
+}
+
+fn print_catalog_chain(prefix: &str, seg: &Segment) {
+    let mt_chunks = seg.metatype_catalog_chunk_count().unwrap_or(0);
+    let obj_chunks = seg.object_catalog_chunk_count().unwrap_or(0);
+    let head_next = seg
+        .metatype_catalog_head()
+        .map(|c| (c.inner().next_offset, c.inner().next_len))
+        .unwrap_or((0, 0));
+    println!(
+        "{prefix}catalog chain: metatype_chunks={mt_chunks} object_chunks={obj_chunks} head_next=({}, {})",
+        head_next.0, head_next.1
+    );
+}
+
 fn print_talc_usage(prefix: &str, seg: &Segment) {
     println!("{}", format_talc_counters(prefix, &seg.talc().counters()));
 }
@@ -321,19 +387,20 @@ fn print_segment(seg: &Segment) {
         print_slab_header("      ", &h);
         if i == 0 && h.is_primary() && h.is_mounted() {
             if let Ok(cat) = seg.metatype_catalog() {
-                print_metatype_catalog("      ", &cat, h.metatype_catalog_len);
+                print_metatype_catalog("      ", seg, &cat, h.metatype_catalog_len);
                 print_registered_metatypes("      ", &cat);
+                print_catalog_chain("      ", seg);
             }
         }
     }
 }
 
-fn print_object_catalog(prefix: &str, cat: &ObjectCatalog, slab_reserved_len: u32) {
+fn print_object_catalog(prefix: &str, seg: &Segment, cat: &ObjectCatalog, slab_reserved_len: u32) {
     let magic_tag =
         fourcc::to_string(OBJECT_CATALOG_MAGIC).unwrap_or_else(|_| "COBJ?".to_string());
-    println!("{prefix}object catalog wire ({magic_tag} v1):");
+    println!("{prefix}object catalog wire ({magic_tag} v{OBJECT_CATALOG_VERSION}):");
     println!(
-        "{prefix}  object_count={} capacity={} slots_free={}",
+        "{prefix}  logical_count={} capacity={} slots_free={}",
         cat.object_count(),
         cat.capacity(),
         cat.slots_remaining()
@@ -344,6 +411,13 @@ fn print_object_catalog(prefix: &str, cat: &ObjectCatalog, slab_reserved_len: u3
         cat.allocated_len(),
         slab_reserved_len
     );
+    if let Ok(head) = seg.object_catalog_head() {
+        let inner = head.inner();
+        println!(
+            "{prefix}  head_next_offset={} head_next_len={}",
+            inner.next_offset, inner.next_len
+        );
+    }
 }
 
 fn print_slab_header(prefix: &str, h: &Header) {
@@ -371,12 +445,12 @@ fn print_slab_header(prefix: &str, h: &Header) {
     }
 }
 
-fn print_metatype_catalog(prefix: &str, cat: &MetaTypeCatalog, slab_reserved_len: u32) {
+fn print_metatype_catalog(prefix: &str, seg: &Segment, cat: &MetaTypeCatalog, slab_reserved_len: u32) {
     let magic_tag =
         fourcc::to_string(METATYPE_CATALOG_MAGIC).unwrap_or_else(|_| "CTLG?".to_string());
     println!("{prefix}metatype catalog wire ({magic_tag} v{METATYPE_CATALOG_VERSION}):");
     println!(
-        "{prefix}  count={} capacity={} slots_free={}",
+        "{prefix}  logical_count={} capacity={} slots_free={}",
         cat.count(),
         cat.capacity(),
         cat.slots_remaining()
@@ -387,6 +461,13 @@ fn print_metatype_catalog(prefix: &str, cat: &MetaTypeCatalog, slab_reserved_len
         cat.allocated_len(),
         slab_reserved_len
     );
+    if let Ok(head) = seg.metatype_catalog_head() {
+        let inner = head.inner();
+        println!(
+            "{prefix}  head_next_offset={} head_next_len={}",
+            inner.next_offset, inner.next_len
+        );
+    }
 }
 
 fn print_registered_metatypes(prefix: &str, cat: &MetaTypeCatalog) {

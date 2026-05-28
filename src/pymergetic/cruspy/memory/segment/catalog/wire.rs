@@ -1,11 +1,14 @@
 //! Generic pinned catalog blob: FourCC header + fixed-size rows.
+//!
+//! Every catalog chunk uses one wire header (`magic`, `version`, `count`, `capacity`,
+//! `next_offset`, `next_len`). Tail chunks set `next_offset` / `next_len` to zero.
 
 use std::marker::PhantomData;
 
 use crate::pymergetic::cruspy::memory::types::TypeError;
 
-/// Wire header size shared by all catalog kinds (`magic`, `version`, `count`, `capacity`).
-pub const CATALOG_HEADER_LEN: usize = 16;
+/// Catalog wire header: `magic`, `version`, `count`, `capacity`, `next_offset`, `next_len`.
+pub const CATALOG_HEADER_LEN: usize = 24;
 
 /// Identifies a catalog blob on disk (magic FourCC + schema version).
 pub trait CatalogKind {
@@ -33,6 +36,10 @@ pub trait CatalogRow: Clone {
 pub struct Catalog<K: CatalogKind> {
     pub rows: Vec<K::Row>,
     pub capacity: u32,
+    /// Arena-relative offset to the next catalog chunk (`0` when [`Self::next_len`] is `0`).
+    pub next_offset: u32,
+    /// Reserved byte length of the next catalog chunk (`0` = none).
+    pub next_len: u32,
     _kind: PhantomData<fn() -> K>,
 }
 
@@ -41,6 +48,8 @@ impl<K: CatalogKind> Catalog<K> {
         Self {
             rows: Vec::new(),
             capacity,
+            next_offset: 0,
+            next_len: 0,
             _kind: PhantomData,
         }
     }
@@ -50,6 +59,8 @@ impl<K: CatalogKind> Catalog<K> {
         Self {
             rows,
             capacity,
+            next_offset: 0,
+            next_len: 0,
             _kind: PhantomData,
         }
     }
@@ -60,6 +71,10 @@ impl<K: CatalogKind> Catalog<K> {
 
     pub fn slots_remaining(&self) -> usize {
         self.capacity as usize - self.rows.len()
+    }
+
+    pub fn has_next(&self) -> bool {
+        self.next_len > 0
     }
 
     pub fn encoded_len_used(count: usize) -> usize {
@@ -76,6 +91,21 @@ impl<K: CatalogKind> Catalog<K> {
 
     pub fn allocated_len(&self) -> usize {
         Self::encoded_len_reserved(self.capacity as usize)
+    }
+
+    pub(crate) fn from_rows_capacity_next(
+        rows: Vec<K::Row>,
+        capacity: u32,
+        next_offset: u32,
+        next_len: u32,
+    ) -> Self {
+        Self {
+            rows,
+            capacity,
+            next_offset,
+            next_len,
+            _kind: PhantomData,
+        }
     }
 
     pub fn append(&mut self, row: K::Row) -> Result<u32, TypeError> {
@@ -100,6 +130,8 @@ impl<K: CatalogKind> Catalog<K> {
         dst[4..8].copy_from_slice(&K::VERSION.to_le_bytes());
         dst[8..12].copy_from_slice(&(self.rows.len() as u32).to_le_bytes());
         dst[12..16].copy_from_slice(&self.capacity.to_le_bytes());
+        dst[16..20].copy_from_slice(&self.next_offset.to_le_bytes());
+        dst[20..24].copy_from_slice(&self.next_len.to_le_bytes());
         let row_len = K::Row::row_len();
         let mut off = CATALOG_HEADER_LEN;
         for row in &self.rows {
@@ -115,16 +147,18 @@ impl<K: CatalogKind> Catalog<K> {
         }
         let magic = u32::from_le_bytes([src[0], src[1], src[2], src[3]]);
         let version = u32::from_le_bytes([src[4], src[5], src[6], src[7]]);
-        let count = u32::from_le_bytes([src[8], src[9], src[10], src[11]]) as usize;
-        let capacity = u32::from_le_bytes([src[12], src[13], src[14], src[15]]);
         if magic != K::MAGIC || version != K::VERSION {
             return Err(TypeError::BadHeader);
         }
+        let count = u32::from_le_bytes([src[8], src[9], src[10], src[11]]) as usize;
+        let capacity = u32::from_le_bytes([src[12], src[13], src[14], src[15]]);
+        let next_offset = u32::from_le_bytes([src[16], src[17], src[18], src[19]]);
+        let next_len = u32::from_le_bytes([src[20], src[21], src[22], src[23]]);
         let capacity_usize = capacity as usize;
         if count > capacity_usize {
             return Err(TypeError::BadHeader);
         }
-        let need = Self::encoded_len_reserved(capacity_usize);
+        let need = CATALOG_HEADER_LEN + capacity_usize * K::Row::row_len();
         if src.len() < need {
             return Err(TypeError::OutOfBounds);
         }
@@ -138,7 +172,39 @@ impl<K: CatalogKind> Catalog<K> {
         Ok(Self {
             rows,
             capacity,
+            next_offset,
+            next_len,
             _kind: PhantomData,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pymergetic::cruspy::memory::segment::catalog::metatype::MetaTypeCatalogKind;
+    use crate::pymergetic::cruspy::memory::types::{FlexString, MetaType};
+
+    #[test]
+    fn header_next_roundtrip() {
+        let row = MetaType::from_type::<FlexString>().to_header();
+        let mut cat = Catalog::<MetaTypeCatalogKind>::with_capacity(4);
+        cat.append(row).unwrap();
+        cat.next_offset = 8192;
+        cat.next_len = 4096;
+        let mut buf = vec![0u8; cat.allocated_len()];
+        cat.write_into(&mut buf).unwrap();
+        let decoded = Catalog::<MetaTypeCatalogKind>::read_from(&buf).unwrap();
+        assert_eq!(decoded.next_offset, 8192);
+        assert_eq!(decoded.next_len, 4096);
+    }
+
+    #[test]
+    fn tail_has_zero_next() {
+        let cat = Catalog::<MetaTypeCatalogKind>::with_capacity(4);
+        let mut buf = vec![0u8; cat.allocated_len()];
+        cat.write_into(&mut buf).unwrap();
+        let decoded = Catalog::<MetaTypeCatalogKind>::read_from(&buf).unwrap();
+        assert!(!decoded.has_next());
     }
 }

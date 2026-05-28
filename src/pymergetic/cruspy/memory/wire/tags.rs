@@ -11,7 +11,7 @@ pub mod slab {
     pub const CRUS: u32 = pack::fourcc("CRUS");
 }
 
-/// Pinned catalog blobs (shared 16-byte catalog header + fixed rows).
+/// Pinned catalog blobs (shared catalog header + fixed rows).
 pub mod catalog {
     use super::pack;
     pub const CTLG: u32 = pack::fourcc("CTLG");

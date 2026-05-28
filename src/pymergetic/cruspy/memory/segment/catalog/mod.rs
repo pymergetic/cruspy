@@ -3,17 +3,22 @@
 //! Both tables use the same wire shape ([`wire::Catalog`]), pin path ([`pin::pin_primary_catalog`]),
 //! and mount sequence ([`mount_primary_catalogs`]). Content differs only by row type and FourCC.
 //!
+//! When a chunk fills, [`chain::append_to_chain`] allocates the next blob in talc and sets
+//! `next_offset` / `next_len` on the tail header (`0` / `0` on the last chunk).
+//!
 //! | Table | Blob tag | Module |
 //! |-------|----------|--------|
 //! | Metatypes | `CTLG` | [`metatype`] |
 //! | Objects | `COBJ` | [`objects`] |
 
+mod chain;
 mod metatype;
 mod metatype_segment;
 mod object_segment;
 mod objects;
 mod pin;
 mod primary;
+pub mod stats;
 pub mod wire;
 
 pub use metatype::{
@@ -24,9 +29,10 @@ pub use objects::{
     ObjectCatalog, DEFAULT_OBJECT_CATALOG_CAPACITY, OBJECT_CATALOG_HEADER_LEN,
     OBJECT_CATALOG_MAGIC, OBJECT_CATALOG_VERSION,
 };
+pub use stats::{format_memory_overview, CatalogKindStats, SegmentMemoryOverview};
 pub use wire::{Catalog, CatalogKind, CatalogRow, CATALOG_HEADER_LEN};
 
-pub(crate) use pin::pin_primary_catalog;
+pub(crate) use pin::{pin_in_talc, pin_primary_catalog, PinnedCatalog};
 
 use crate::pymergetic::cruspy::io::HasSlab;
 use crate::pymergetic::cruspy::memory::segment::SegmentError;

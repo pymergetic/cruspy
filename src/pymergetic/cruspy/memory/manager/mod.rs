@@ -560,4 +560,34 @@ mod tests {
             MIN_SLAB_CAPACITY - HEADER_LEN
         );
     }
+
+    #[test]
+    fn metatype_catalog_chain_grows_when_head_is_full() {
+        use crate::pymergetic::cruspy::memory::types::MetaType;
+
+        let mut mgr = Manager::new();
+        let base: Locator = Ram::build_url("chain-metatype").into();
+        let seg_id = mgr.open_segment(base, Some(MIN_SLAB_CAPACITY)).unwrap();
+        let seg = mgr.segment_mut(seg_id).unwrap();
+        let cap = seg.metatype_catalog().unwrap().capacity() as usize;
+        assert_eq!(seg.metatype_catalog_chunk_count().unwrap(), 1);
+
+        for i in 1..cap {
+            let mut uuid = [0u8; 16];
+            uuid[..8].copy_from_slice(&(i as u64).to_le_bytes());
+            let row = MetaType::new(format!("chain.type.{i}"), uuid, 1).to_header();
+            seg.register_metatype(row).unwrap();
+        }
+        assert_eq!(seg.metatype_catalog_chunk_count().unwrap(), 1);
+
+        let overflow = MetaType::new("chain.type.overflow", [0xFF; 16], 1).to_header();
+        let idx = seg.register_metatype(overflow).unwrap();
+        assert_eq!(idx, cap as u32);
+        assert_eq!(seg.metatype_catalog_chunk_count().unwrap(), 2);
+        assert_eq!(seg.metatype_catalog().unwrap().count(), cap + 1);
+        assert_eq!(
+            seg.metatype_at(idx).unwrap().map(|h| h.type_uuid),
+            Some([0xFF; 16])
+        );
+    }
 }

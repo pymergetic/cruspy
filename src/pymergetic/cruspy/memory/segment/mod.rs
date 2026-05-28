@@ -14,7 +14,8 @@ mod error;
 mod header;
 
 pub use catalog::{
-    Catalog, CatalogKind, CatalogRow, MetaTypeCatalog, ObjectCatalog, CATALOG_HEADER_LEN,
+    format_memory_overview, Catalog, CatalogKind, CatalogRow, CatalogKindStats,
+    MetaTypeCatalog, ObjectCatalog, SegmentMemoryOverview, CATALOG_HEADER_LEN,
     DEFAULT_METATYPE_CATALOG_CAPACITY, DEFAULT_OBJECT_CATALOG_CAPACITY, METATYPE_CATALOG_HEADER_LEN,
     METATYPE_CATALOG_MAGIC, METATYPE_CATALOG_SELF_INDEX, METATYPE_CATALOG_VERSION,
     OBJECT_CATALOG_HEADER_LEN, OBJECT_CATALOG_MAGIC, OBJECT_CATALOG_VERSION,
@@ -337,6 +338,29 @@ impl Segment {
 
     pub fn talc(&self) -> &TalcCell<Manual> {
         &self.talc
+    }
+
+    pub fn talc_mut(&mut self) -> &mut TalcCell<Manual> {
+        &mut self.talc
+    }
+
+    /// Pin a catalog blob into the primary slab arena (talc + backend field split borrow).
+    pub(crate) fn pin_catalog_on_primary(
+        &mut self,
+        catalog: &dyn catalog::PinnedCatalog,
+    ) -> Result<(u32, u32), SegmentError> {
+        let arena_start = {
+            let backend = self.backends().first().ok_or(SegmentError::BadIndex)?;
+            arena_range(backend.bytes(), backend.info().capacity)?.start
+        };
+        if self.backends.is_empty() {
+            return Err(SegmentError::BadIndex);
+        }
+        let backend_ptr = self.backends.as_mut_ptr();
+        let talc = self.talc_mut();
+        // SAFETY: `pin_in_talc` allocates in talc only; it does not reallocate `backends`.
+        let backend = unsafe { &*backend_ptr };
+        catalog::pin_in_talc(talc, backend.as_ref(), catalog, arena_start)
     }
 
     pub fn close(&mut self, index: usize) -> Result<(), SegmentTeardownError> {

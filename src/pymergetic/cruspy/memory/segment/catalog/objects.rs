@@ -4,11 +4,11 @@ use crate::pymergetic::cruspy::memory::types::{ObjectHeader, TypeError, OBJECT_H
 use crate::pymergetic::cruspy::memory::wire::tags::catalog;
 
 use super::pin::PinnedCatalog;
-use super::wire::{Catalog, CatalogKind, CatalogRow, CATALOG_HEADER_LEN};
+use super::wire::{Catalog, CatalogKind, CatalogRow};
 
 pub const OBJECT_CATALOG_MAGIC: u32 = catalog::COBJ;
-pub const OBJECT_CATALOG_VERSION: u32 = 1;
-pub const OBJECT_CATALOG_HEADER_LEN: usize = CATALOG_HEADER_LEN;
+pub const OBJECT_CATALOG_VERSION: u32 = 2;
+pub const OBJECT_CATALOG_HEADER_LEN: usize = super::wire::CATALOG_HEADER_LEN;
 pub const DEFAULT_OBJECT_CATALOG_CAPACITY: u32 = 4096;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -54,9 +54,22 @@ impl ObjectCatalog {
         Self(Catalog::with_capacity(capacity))
     }
 
+    /// Extension chunk: empty table, same reserved capacity as the tail being extended.
+    pub fn for_mount_extension(capacity: u32) -> Result<Self, TypeError> {
+        Ok(Self::with_capacity(capacity))
+    }
+
     /// Primary mount: reserved slots, initially empty (`object_count == 0`).
     pub fn for_mount(capacity: u32) -> Result<Self, TypeError> {
-        Ok(Self::with_capacity(capacity))
+        Self::for_mount_extension(capacity)
+    }
+
+    pub fn from_flat(catalog: Catalog<ObjectCatalogKind>) -> Self {
+        Self(catalog)
+    }
+
+    pub fn inner(&self) -> &Catalog<ObjectCatalogKind> {
+        &self.0
     }
 
     pub fn objects(&self) -> &[ObjectHeader] {
