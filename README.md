@@ -1,10 +1,8 @@
 # cruspy
 
-**cruspy — polyglot shared-memory runtime**
+**Experimental / alpha** polyglot shared-memory runtime (C++ data layer, Rust mediation, Python on top). APIs, SHM layout, and codegen can change without a stable compatibility promise.
 
-C++ data layer, Rust mediation bridge, Python on top. Models are defined in
-**OpenAPI 3.1** YAML (EP-0021); **cruspy-gen** emits C++, Rust, and Python
-from a single source of truth.
+Models are defined in **OpenAPI 3.1** YAML (EP-0021); **cruspy-gen** emits C++, Rust, and Python from a single source of truth.
 
 | Surface | Value |
 |---------|-------|

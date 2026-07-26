@@ -8,12 +8,13 @@ no-build-isolation-package = ["pymergetic-cruspy"]
 [project]
 name = "pymergetic-cruspy"
 version = "0.1.0"
-description = "Polyglot shared-memory runtime (import as pymergetic.cruspy)"
+description = "Experimental / alpha polyglot shared-memory runtime (import as pymergetic.cruspy)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
-  { name = "PymergeticOS Maintainers", email = "raudzus@pymergetic.com" }
+  { name = "Rouven Raudzus", email = "raudzus@pymergetic.com" }
 ]
 keywords = ["cruspy", "pymergetic-cruspy", "shm", "pydantic", "pymergetic"]
 classifiers = [
